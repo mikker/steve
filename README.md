@@ -36,8 +36,11 @@ steve quit "AppName" --force
 ```
 steve elements
 steve elements --depth 5
+steve elements --window "Settings"
 steve find "Button"
 steve find --title "Submit"
+steve find --text "Dictation Mode"
+steve find --text "Dictation Mode" --window "Settings" --ancestor-role AXRow --click
 steve find --role AXButton --title "OK"
 steve find --identifier "loginButton"
 steve element-at 100 200
@@ -48,6 +51,8 @@ steve element-at 100 200
 ```
 steve click "ax://1234/0.2.5"
 steve click --title "Submit"
+steve click --text "Dictation Mode"
+steve click --window "Settings" --text "Dictation Mode"
 steve click-at 100 200 --double
 steve type "hello world" --delay 50
 steve key cmd+shift+p
@@ -55,6 +60,12 @@ steve set-value "ax://1234/0.1" "new text"
 steve scroll down --amount 5
 steve scroll --element "ax://1234/0.4" up
 ```
+
+### Reliability Helpers
+
+- `--text` matches visible text via `AXValue`, `AXDescription`, and `AXStaticText` title (case-insensitive substring).
+- `--window "Title"` scopes `find`, `elements`, and `click` to a specific window title.
+- `--ancestor-role AXRow|AXCell|AXButton --click` clicks the nearest ancestor role after a text match.
 
 ### Assertions
 

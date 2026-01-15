@@ -121,6 +121,22 @@ struct AXHelper {
         attribute(element, AXConst.Attr.identifier)
     }
 
+    static func stringAttribute(_ element: AXUIElement, _ attr: CFString) -> String? {
+        if let value: String = attribute(element, attr) { return value }
+        if let value: NSAttributedString = attribute(element, attr) { return value.string }
+        if let value: NSNumber = attribute(element, attr) { return value.stringValue }
+        return nil
+    }
+
+    static func matchesText(element: AXUIElement, role: String, text: String) -> Bool {
+        let needle = text.lowercased()
+        var candidates: [String] = []
+        if let value = stringAttribute(element, AXConst.Attr.value) { candidates.append(value) }
+        if let desc = stringAttribute(element, AXConst.Attr.description) { candidates.append(desc) }
+        if role == "AXStaticText", let title = stringAttribute(element, AXConst.Attr.title) { candidates.append(title) }
+        return candidates.contains { $0.lowercased().contains(needle) }
+    }
+
     static func elementInfo(element: AXUIElement, pid: pid_t, path: [Int], depth: Int) -> [String: Any] {
         var dict: [String: Any] = [:]
         dict["id"] = elementId(pid: pid, path: path)
@@ -195,9 +211,10 @@ struct AXHelper {
         return "AX" + input
     }
 
-    static func match(element: AXUIElement, role: String?, title: String?, identifier: String?) -> Bool {
+    static func match(element: AXUIElement, role: String?, title: String?, identifier: String?, text: String?) -> Bool {
+        let actualRole = self.role(of: element) ?? ""
         if let role {
-            if normalizeRole(role) != (self.role(of: element) ?? "") { return false }
+            if normalizeRole(role) != actualRole { return false }
         }
         if let title {
             if title != (self.title(of: element) ?? "") { return false }
@@ -205,13 +222,16 @@ struct AXHelper {
         if let identifier {
             if identifier != (self.identifier(of: element) ?? "") { return false }
         }
+        if let text {
+            if !matchesText(element: element, role: actualRole, text: text) { return false }
+        }
         return true
     }
 
-    static func findElements(root: AXUIElement, role: String?, title: String?, identifier: String?) -> [(AXUIElement, [Int])] {
+    static func findElements(root: AXUIElement, rootPath: [Int] = [0], role: String?, title: String?, identifier: String?, text: String?) -> [(AXUIElement, [Int])] {
         var matches: [(AXUIElement, [Int])] = []
         func walk(_ element: AXUIElement, _ path: [Int]) {
-            if match(element: element, role: role, title: title, identifier: identifier) {
+            if match(element: element, role: role, title: title, identifier: identifier, text: text) {
                 matches.append((element, path))
             }
             let kids = children(of: element)
@@ -219,7 +239,23 @@ struct AXHelper {
                 walk(child, path + [idx])
             }
         }
-        walk(root, [0])
+        walk(root, rootPath)
         return matches
+    }
+
+    static func ancestor(forPath path: [Int], in root: AXUIElement, role: String) -> AXUIElement? {
+        var lineage: [AXUIElement] = [root]
+        var current = root
+        for index in path.dropFirst() {
+            let kids = children(of: current)
+            guard index >= 0, index < kids.count else { break }
+            current = kids[index]
+            lineage.append(current)
+        }
+        let normalized = normalizeRole(role)
+        for element in lineage.reversed() {
+            if (self.role(of: element) ?? "") == normalized { return element }
+        }
+        return nil
     }
 }

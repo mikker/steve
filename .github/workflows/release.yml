@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: swift build -c release
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          bin_name=steve
+          arch=$(uname -m)
+          cp .build/release/${bin_name} dist/${bin_name}
+          chmod +x dist/${bin_name}
+          (cd dist && tar -czf ${bin_name}-macos-${arch}.tar.gz ${bin_name})
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz

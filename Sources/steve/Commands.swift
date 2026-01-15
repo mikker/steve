@@ -110,14 +110,12 @@ struct Commands {
             return UitoolExit.permissionDenied.rawValue
         }
         let depth = parseIntFlag(args, "--depth") ?? 3
-        guard let app = AXHelper.runningApp(options: ctx.options) else {
-            JSON.error("App not found", quiet: ctx.options.quiet)
-            return UitoolExit.appNotFound.rawValue
+        let windowTitle = parseStringFlag(args, "--window")
+        return withResolvedRoot(options: ctx.options, windowTitle: windowTitle, quiet: ctx.options.quiet) { app, root, path in
+            let info = AXHelper.elementInfo(element: root, pid: app.processIdentifier, path: path, depth: depth)
+            JSON.ok([info], quiet: ctx.options.quiet)
+            return UitoolExit.success.rawValue
         }
-        let root = AXHelper.appElement(for: app)
-        let info = AXHelper.elementInfo(element: root, pid: app.processIdentifier, path: [0], depth: depth)
-        JSON.ok([info], quiet: ctx.options.quiet)
-        return UitoolExit.success.rawValue
     }
 
     static func find(ctx: CommandContext, args: [String]) -> Int32 {
@@ -125,23 +123,35 @@ struct Commands {
             JSON.error("Accessibility permission denied", quiet: ctx.options.quiet)
             return UitoolExit.permissionDenied.rawValue
         }
-        var role = parseStringFlag(args, "--role")
-        let title = parseStringFlag(args, "--title")
-        let identifier = parseStringFlag(args, "--identifier")
-        if role == nil, title == nil, identifier == nil {
-            role = args.first
+        let options = parseFindOptions(args)
+        return withResolvedRoot(options: ctx.options, windowTitle: options.windowTitle, quiet: ctx.options.quiet) { app, root, path in
+            let matches = AXHelper.findElements(root: root, rootPath: path, role: options.role, title: options.title, identifier: options.identifier, text: options.text)
+            if matches.isEmpty {
+                JSON.error("Element not found", quiet: ctx.options.quiet)
+                return UitoolExit.notFound.rawValue
+            }
+            if options.shouldClick {
+                let targetPath = matches[0].1
+                var target = matches[0].0
+                if let ancestorRole = options.ancestorRole {
+                    if let ancestor = AXHelper.ancestor(forPath: targetPath, in: AXHelper.appElement(for: app), role: ancestorRole) {
+                        target = ancestor
+                    } else {
+                        JSON.error("Ancestor not found", quiet: ctx.options.quiet)
+                        return UitoolExit.notFound.rawValue
+                    }
+                }
+                if !tryClick(target) {
+                    JSON.error("Failed to click element", quiet: ctx.options.quiet)
+                    return UitoolExit.notFound.rawValue
+                }
+            }
+            let data = matches.map { element, matchPath in
+                AXHelper.elementInfo(element: element, pid: app.processIdentifier, path: matchPath, depth: 0)
+            }
+            JSON.ok(data, quiet: ctx.options.quiet)
+            return UitoolExit.success.rawValue
         }
-        guard let app = AXHelper.runningApp(options: ctx.options) else {
-            JSON.error("App not found", quiet: ctx.options.quiet)
-            return UitoolExit.appNotFound.rawValue
-        }
-        let root = AXHelper.appElement(for: app)
-        let matches = AXHelper.findElements(root: root, role: role, title: title, identifier: identifier)
-        let data = matches.map { element, path in
-            AXHelper.elementInfo(element: element, pid: app.processIdentifier, path: path, depth: 0)
-        }
-        JSON.ok(data, quiet: ctx.options.quiet)
-        return UitoolExit.success.rawValue
     }
 
     static func elementAt(ctx: CommandContext, args: [String]) -> Int32 {
@@ -193,28 +203,22 @@ struct Commands {
         }
         let role = parseStringFlag(args, "--role")
         let title = parseStringFlag(args, "--title")
+        let text = parseStringFlag(args, "--text")
         let identifier = parseStringFlag(args, "--identifier")
-        guard let app = AXHelper.runningApp(options: ctx.options) else {
-            JSON.error("App not found", quiet: ctx.options.quiet)
-            return UitoolExit.appNotFound.rawValue
-        }
-        let root = AXHelper.appElement(for: app)
-        let matches = AXHelper.findElements(root: root, role: role, title: title, identifier: identifier)
-        guard let target = matches.first?.0 else {
-            JSON.error("Element not found", quiet: ctx.options.quiet)
+        let windowTitle = parseStringFlag(args, "--window")
+        return withResolvedRoot(options: ctx.options, windowTitle: windowTitle, quiet: ctx.options.quiet) { _, root, path in
+            let matches = AXHelper.findElements(root: root, rootPath: path, role: role, title: title, identifier: identifier, text: text)
+            guard let target = matches.first?.0 else {
+                JSON.error("Element not found", quiet: ctx.options.quiet)
+                return UitoolExit.notFound.rawValue
+            }
+            if tryClick(target) {
+                JSON.ok(quiet: ctx.options.quiet)
+                return UitoolExit.success.rawValue
+            }
+            JSON.error("Failed to click element", quiet: ctx.options.quiet)
             return UitoolExit.notFound.rawValue
         }
-        if press(element: target) {
-            JSON.ok(quiet: ctx.options.quiet)
-            return UitoolExit.success.rawValue
-        }
-        if let frame = AXHelper.frame(of: target) {
-            EventHelper.click(at: CGPoint(x: frame.midX, y: frame.midY))
-            JSON.ok(quiet: ctx.options.quiet)
-            return UitoolExit.success.rawValue
-        }
-        JSON.error("Failed to click element", quiet: ctx.options.quiet)
-        return UitoolExit.notFound.rawValue
     }
 
     static func clickAt(ctx: CommandContext, args: [String]) -> Int32 {
@@ -303,7 +307,7 @@ struct Commands {
             return UitoolExit.appNotFound.rawValue
         }
         let root = AXHelper.appElement(for: app)
-        let matches = AXHelper.findElements(root: root, role: role, title: title, identifier: identifier)
+        let matches = AXHelper.findElements(root: root, role: role, title: title, identifier: identifier, text: nil)
         if matches.isEmpty {
             JSON.error("Element not found", quiet: ctx.options.quiet)
             return UitoolExit.notFound.rawValue
@@ -329,7 +333,7 @@ struct Commands {
         let root = AXHelper.appElement(for: app)
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let matches = AXHelper.findElements(root: root, role: role, title: title, identifier: identifier)
+            let matches = AXHelper.findElements(root: root, role: role, title: title, identifier: identifier, text: nil)
             let found = !matches.isEmpty
             if gone {
                 if !found {
@@ -364,7 +368,7 @@ struct Commands {
             return UitoolExit.appNotFound.rawValue
         }
         let root = AXHelper.appElement(for: app)
-        guard let element = AXHelper.findElements(root: root, role: role, title: title, identifier: identifier).first?.0 else {
+        guard let element = AXHelper.findElements(root: root, role: role, title: title, identifier: identifier, text: nil).first?.0 else {
             JSON.error("Element not found", quiet: ctx.options.quiet)
             return UitoolExit.notFound.rawValue
         }
@@ -609,6 +613,13 @@ func press(element: AXUIElement) -> Bool {
     AXUIElementPerformAction(element, AXConst.Action.press) == .success
 }
 
+func tryClick(_ element: AXUIElement) -> Bool {
+    if press(element: element) { return true }
+    guard let frame = AXHelper.frame(of: element) else { return false }
+    EventHelper.click(at: CGPoint(x: frame.midX, y: frame.midY))
+    return true
+}
+
 func parseStringFlag(_ args: [String], _ flag: String) -> String? {
     guard let idx = args.firstIndex(of: flag), idx + 1 < args.count else { return nil }
     return args[idx + 1]
@@ -617,6 +628,54 @@ func parseStringFlag(_ args: [String], _ flag: String) -> String? {
 func parseIntFlag(_ args: [String], _ flag: String) -> Int? {
     guard let idx = args.firstIndex(of: flag), idx + 1 < args.count else { return nil }
     return Int(args[idx + 1])
+}
+
+struct FindOptions {
+    var role: String?
+    var title: String?
+    var text: String?
+    var identifier: String?
+    var windowTitle: String?
+    var ancestorRole: String?
+    var shouldClick = false
+}
+
+func parseFindOptions(_ args: [String]) -> FindOptions {
+    var options = FindOptions()
+    var i = 0
+    while i < args.count {
+        let arg = args[i]
+        switch arg {
+        case "--role":
+            if i + 1 < args.count { options.role = args[i + 1] }
+            i += 2
+        case "--title":
+            if i + 1 < args.count { options.title = args[i + 1] }
+            i += 2
+        case "--text":
+            if i + 1 < args.count { options.text = args[i + 1] }
+            i += 2
+        case "--identifier":
+            if i + 1 < args.count { options.identifier = args[i + 1] }
+            i += 2
+        case "--window":
+            if i + 1 < args.count { options.windowTitle = args[i + 1] }
+            i += 2
+        case "--ancestor-role":
+            if i + 1 < args.count { options.ancestorRole = args[i + 1] }
+            i += 2
+        case "--click":
+            options.shouldClick = true
+            i += 1
+        default:
+            if !arg.hasPrefix("-"),
+               options.role == nil, options.title == nil, options.identifier == nil, options.text == nil {
+                options.role = arg
+            }
+            i += 1
+        }
+    }
+    return options
 }
 
 func firstPositionalArg(_ args: [String]) -> String? {
@@ -650,6 +709,40 @@ func windowFromId(_ id: String, options: GlobalOptions) -> AXUIElement? {
         return nil
     }
     return AXHelper.elementFromId(id)
+}
+
+enum RootResolution {
+    case ok(NSRunningApplication, AXUIElement, [Int])
+    case appNotFound
+    case windowNotFound
+}
+
+func resolveRoot(options: GlobalOptions, windowTitle: String?) -> RootResolution {
+    guard let app = AXHelper.runningApp(options: options) else { return .appNotFound }
+    let appElement = AXHelper.appElement(for: app)
+    guard let windowTitle else { return .ok(app, appElement, [0]) }
+    let windows: [AXUIElement] = AXHelper.attribute(appElement, AXConst.Attr.windows) ?? []
+    for window in windows {
+        if let title = AXHelper.stringAttribute(window, AXConst.Attr.title),
+           title.localizedCaseInsensitiveContains(windowTitle) {
+            let path = AXHelper.findPath(to: window, in: appElement) ?? [0]
+            return .ok(app, window, path)
+        }
+    }
+    return .windowNotFound
+}
+
+func withResolvedRoot(options: GlobalOptions, windowTitle: String?, quiet: Bool, _ body: (NSRunningApplication, AXUIElement, [Int]) -> Int32) -> Int32 {
+    switch resolveRoot(options: options, windowTitle: windowTitle) {
+    case .appNotFound:
+        JSON.error("App not found", quiet: quiet)
+        return UitoolExit.appNotFound.rawValue
+    case .windowNotFound:
+        JSON.error("Window not found", quiet: quiet)
+        return UitoolExit.notFound.rawValue
+    case .ok(let app, let root, let path):
+        return body(app, root, path)
+    }
 }
 
 func menuTree(_ element: AXUIElement, depth: Int) -> [[String: Any]] {
