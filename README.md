@@ -57,6 +57,10 @@ steve click --window "Settings" --text "Dictation Mode"
 steve click-at 100 200 --double
 steve type "hello world" --delay 50
 steve key cmd+shift+p
+steve key f12
+steve key fn+f12
+steve key --raw 122
+steve key --list
 steve set-value "ax://1234/0.1" "new text"
 steve scroll down --amount 5
 steve scroll --element "ax://1234/0.4" up
@@ -72,8 +76,10 @@ steve scroll --element "ax://1234/0.4" up
 
 ```
 steve exists --title "Welcome"
+steve exists --text "Ready" --window "Settings"
 steve wait --title "Results" --timeout 5
 steve wait --title "Loading..." --gone --timeout 10
+steve wait --text "Loading..." --window "Settings" --timeout 10
 steve assert --title "Submit" --enabled
 steve assert --title "Checkbox" --checked
 steve assert --title "Input" --value "expected text"
@@ -93,6 +99,11 @@ steve window move "ax://win/123" 100 100
 ```
 steve menus
 steve menu "File" "New"
+steve menu --contains --case-insensitive "settings..."
+steve menu --list "File"
+steve statusbar --list
+steve statusbar "Wi-Fi"
+steve statusbar --menu --contains "Battery"
 ```
 
 ### Screenshots

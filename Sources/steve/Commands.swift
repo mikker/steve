@@ -245,6 +245,23 @@ struct Commands {
     }
 
     static func key(ctx: CommandContext, args: [String]) -> Int32 {
+        if args.contains("--list") {
+            JSON.ok(["keys": KeyCodes.supportedKeys()], quiet: ctx.options.quiet)
+            return UitoolExit.success.rawValue
+        }
+        if let rawIndex = args.firstIndex(of: "--raw") {
+            guard rawIndex + 1 < args.count, let raw = Int(args[rawIndex + 1]) else {
+                JSON.error("Usage: key --raw <keycode>", quiet: ctx.options.quiet)
+                return UitoolExit.invalidArguments.rawValue
+            }
+            let shortcut = "raw:\(raw)"
+            if EventHelper.keyShortcut(shortcut) {
+                JSON.ok(quiet: ctx.options.quiet)
+                return UitoolExit.success.rawValue
+            }
+            JSON.error("Unknown key", quiet: ctx.options.quiet)
+            return UitoolExit.invalidArguments.rawValue
+        }
         guard let keyString = args.first else {
             JSON.error("Usage: key <shortcut>", quiet: ctx.options.quiet)
             return UitoolExit.invalidArguments.rawValue
@@ -255,6 +272,11 @@ struct Commands {
         }
         JSON.error("Unknown key", quiet: ctx.options.quiet)
         return UitoolExit.invalidArguments.rawValue
+    }
+
+    static func keys(ctx: CommandContext) -> Int32 {
+        JSON.ok(["keys": KeyCodes.supportedKeys()], quiet: ctx.options.quiet)
+        return UitoolExit.success.rawValue
     }
 
     static func setValue(ctx: CommandContext, args: [String]) -> Int32 {
@@ -299,21 +321,16 @@ struct Commands {
             JSON.error("Accessibility permission denied", quiet: ctx.options.quiet)
             return UitoolExit.permissionDenied.rawValue
         }
-        let role = parseStringFlag(args, "--role")
-        let title = parseStringFlag(args, "--title")
-        let identifier = parseStringFlag(args, "--identifier")
-        guard let app = AXHelper.runningApp(options: ctx.options) else {
-            JSON.error("App not found", quiet: ctx.options.quiet)
-            return UitoolExit.appNotFound.rawValue
+        let query = parseQueryOptions(args)
+        return withResolvedRoot(options: ctx.options, windowTitle: query.windowTitle, quiet: ctx.options.quiet) { _, root, path in
+            let matches = AXHelper.findElements(root: root, rootPath: path, role: query.role, title: query.title, identifier: query.identifier, text: query.text)
+            if matches.isEmpty {
+                JSON.error("Element not found", quiet: ctx.options.quiet)
+                return UitoolExit.notFound.rawValue
+            }
+            JSON.ok(quiet: ctx.options.quiet)
+            return UitoolExit.success.rawValue
         }
-        let root = AXHelper.appElement(for: app)
-        let matches = AXHelper.findElements(root: root, role: role, title: title, identifier: identifier, text: nil)
-        if matches.isEmpty {
-            JSON.error("Element not found", quiet: ctx.options.quiet)
-            return UitoolExit.notFound.rawValue
-        }
-        JSON.ok(quiet: ctx.options.quiet)
-        return UitoolExit.success.rawValue
     }
 
     static func wait(ctx: CommandContext, args: [String]) -> Int32 {
@@ -321,19 +338,26 @@ struct Commands {
             JSON.error("Accessibility permission denied", quiet: ctx.options.quiet)
             return UitoolExit.permissionDenied.rawValue
         }
-        let role = parseStringFlag(args, "--role")
-        let title = parseStringFlag(args, "--title")
-        let identifier = parseStringFlag(args, "--identifier")
+        let query = parseQueryOptions(args)
         let gone = args.contains("--gone")
         let timeout = TimeInterval(parseIntFlag(args, "--timeout") ?? Int(ctx.options.timeout))
         guard let app = AXHelper.runningApp(options: ctx.options) else {
             JSON.error("App not found", quiet: ctx.options.quiet)
             return UitoolExit.appNotFound.rawValue
         }
-        let root = AXHelper.appElement(for: app)
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let matches = AXHelper.findElements(root: root, role: role, title: title, identifier: identifier, text: nil)
+            let matches: [(AXUIElement, [Int])]
+            let appElement = AXHelper.appElement(for: app)
+            if let windowTitle = query.windowTitle {
+                if let (root, path) = findWindowRoot(in: appElement, windowTitle: windowTitle) {
+                    matches = AXHelper.findElements(root: root, rootPath: path, role: query.role, title: query.title, identifier: query.identifier, text: query.text)
+                } else {
+                    matches = []
+                }
+            } else {
+                matches = AXHelper.findElements(root: appElement, rootPath: [0], role: query.role, title: query.title, identifier: query.identifier, text: query.text)
+            }
             let found = !matches.isEmpty
             if gone {
                 if !found {
@@ -357,43 +381,38 @@ struct Commands {
             JSON.error("Accessibility permission denied", quiet: ctx.options.quiet)
             return UitoolExit.permissionDenied.rawValue
         }
-        let role = parseStringFlag(args, "--role")
-        let title = parseStringFlag(args, "--title")
-        let identifier = parseStringFlag(args, "--identifier")
+        let query = parseQueryOptions(args)
         let checkEnabled = args.contains("--enabled")
         let checkChecked = args.contains("--checked")
         let expectedValue = parseStringFlag(args, "--value")
-        guard let app = AXHelper.runningApp(options: ctx.options) else {
-            JSON.error("App not found", quiet: ctx.options.quiet)
-            return UitoolExit.appNotFound.rawValue
-        }
-        let root = AXHelper.appElement(for: app)
-        guard let element = AXHelper.findElements(root: root, role: role, title: title, identifier: identifier, text: nil).first?.0 else {
-            JSON.error("Element not found", quiet: ctx.options.quiet)
-            return UitoolExit.notFound.rawValue
-        }
-        if checkEnabled {
-            if AXHelper.boolAttribute(element, AXConst.Attr.enabled) != true {
-                JSON.error("Expected enabled", quiet: ctx.options.quiet)
+        return withResolvedRoot(options: ctx.options, windowTitle: query.windowTitle, quiet: ctx.options.quiet) { _, root, path in
+            guard let element = AXHelper.findElements(root: root, rootPath: path, role: query.role, title: query.title, identifier: query.identifier, text: query.text).first?.0 else {
+                JSON.error("Element not found", quiet: ctx.options.quiet)
                 return UitoolExit.notFound.rawValue
             }
-        }
-        if checkChecked {
-            let checked = AXHelper.boolAttribute(element, AXConst.Attr.value) ?? AXHelper.boolAttribute(element, AXConst.Attr.selected)
-            if checked != true {
-                JSON.error("Expected checked", quiet: ctx.options.quiet)
-                return UitoolExit.notFound.rawValue
+            if checkEnabled {
+                if AXHelper.boolAttribute(element, AXConst.Attr.enabled) != true {
+                    JSON.error("Expected enabled", quiet: ctx.options.quiet)
+                    return UitoolExit.notFound.rawValue
+                }
             }
-        }
-        if let expectedValue {
-            let actual: String? = AXHelper.attribute(element, AXConst.Attr.value)
-            if actual != expectedValue {
-                JSON.error("Value mismatch", quiet: ctx.options.quiet)
-                return UitoolExit.notFound.rawValue
+            if checkChecked {
+                let checked = AXHelper.boolAttribute(element, AXConst.Attr.value) ?? AXHelper.boolAttribute(element, AXConst.Attr.selected)
+                if checked != true {
+                    JSON.error("Expected checked", quiet: ctx.options.quiet)
+                    return UitoolExit.notFound.rawValue
+                }
             }
+            if let expectedValue {
+                let actual: String? = AXHelper.attribute(element, AXConst.Attr.value)
+                if actual != expectedValue {
+                    JSON.error("Value mismatch", quiet: ctx.options.quiet)
+                    return UitoolExit.notFound.rawValue
+                }
+            }
+            JSON.ok(quiet: ctx.options.quiet)
+            return UitoolExit.success.rawValue
         }
-        JSON.ok(quiet: ctx.options.quiet)
-        return UitoolExit.success.rawValue
     }
 
     static func windows(ctx: CommandContext, args: [String]) -> Int32 {
@@ -497,7 +516,8 @@ struct Commands {
             JSON.error("App not found", quiet: ctx.options.quiet)
             return UitoolExit.appNotFound.rawValue
         }
-        guard !args.isEmpty else {
+        let options = parseMenuOptions(args)
+        if options.path.isEmpty, !options.listChildren {
             JSON.error("Usage: menu <path...>", quiet: ctx.options.quiet)
             return UitoolExit.invalidArguments.rawValue
         }
@@ -506,13 +526,86 @@ struct Commands {
             JSON.error("Menu bar not found", quiet: ctx.options.quiet)
             return UitoolExit.notFound.rawValue
         }
-        if let target = findMenuItem(menuBar: menuBar, path: args) {
+        if options.listChildren {
+            guard let container = findMenuContainer(menuBar: menuBar, path: options.path, match: options.match) else {
+                JSON.error("Menu item not found", quiet: ctx.options.quiet)
+                return UitoolExit.notFound.rawValue
+            }
+            let children = menuChildren(of: container).map { child -> [String: Any] in
+                var dict: [String: Any] = [:]
+                if let title = AXHelper.stringAttribute(child, AXConst.Attr.title) { dict["title"] = title }
+                if let role = AXHelper.role(of: child) { dict["role"] = role }
+                return dict
+            }
+            JSON.ok(children, quiet: ctx.options.quiet)
+            return UitoolExit.success.rawValue
+        }
+        if let target = findMenuItem(menuBar: menuBar, path: options.path, match: options.match) {
             if press(element: target) {
                 JSON.ok(quiet: ctx.options.quiet)
                 return UitoolExit.success.rawValue
             }
         }
         JSON.error("Menu item not found", quiet: ctx.options.quiet)
+        return UitoolExit.notFound.rawValue
+    }
+
+    static func statusbar(ctx: CommandContext, args: [String]) -> Int32 {
+        guard AXHelper.ensureTrusted() else {
+            JSON.error("Accessibility permission denied", quiet: ctx.options.quiet)
+            return UitoolExit.permissionDenied.rawValue
+        }
+        let options = parseStatusBarOptions(args)
+        guard let menuBar = systemMenuBar() else {
+            JSON.error("Menu bar not found", quiet: ctx.options.quiet)
+            return UitoolExit.notFound.rawValue
+        }
+        let items = statusBarItems(in: menuBar)
+        if options.listItems {
+            let data = items.map { item -> [String: Any] in
+                var dict: [String: Any] = [:]
+                if let title = AXHelper.stringAttribute(item, AXConst.Attr.title) { dict["title"] = title }
+                if let desc = AXHelper.stringAttribute(item, AXConst.Attr.description) { dict["description"] = desc }
+                if let role = AXHelper.role(of: item) { dict["role"] = role }
+                if let frame = AXHelper.frame(of: item) {
+                    dict["frame"] = ["x": frame.origin.x, "y": frame.origin.y, "width": frame.size.width, "height": frame.size.height]
+                }
+                return dict
+            }
+            JSON.ok(data, quiet: ctx.options.quiet)
+            return UitoolExit.success.rawValue
+        }
+        guard let name = options.name else {
+            JSON.error("Usage: statusbar --list | statusbar <item> | statusbar --menu <item>", quiet: ctx.options.quiet)
+            return UitoolExit.invalidArguments.rawValue
+        }
+        guard let target = findStatusBarItem(items, name: name, match: options.match) else {
+            JSON.error("Status bar item not found", quiet: ctx.options.quiet)
+            return UitoolExit.notFound.rawValue
+        }
+        if options.listMenu {
+            if AXHelper.attribute(target, AXConst.Attr.menu) as AXUIElement? == nil {
+                _ = press(element: target)
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            guard let menu: AXUIElement = AXHelper.attribute(target, AXConst.Attr.menu) else {
+                JSON.error("Menu not found", quiet: ctx.options.quiet)
+                return UitoolExit.notFound.rawValue
+            }
+            let children = AXHelper.children(of: menu).map { child -> [String: Any] in
+                var dict: [String: Any] = [:]
+                if let title = AXHelper.stringAttribute(child, AXConst.Attr.title) { dict["title"] = title }
+                if let role = AXHelper.role(of: child) { dict["role"] = role }
+                return dict
+            }
+            JSON.ok(children, quiet: ctx.options.quiet)
+            return UitoolExit.success.rawValue
+        }
+        if press(element: target) {
+            JSON.ok(quiet: ctx.options.quiet)
+            return UitoolExit.success.rawValue
+        }
+        JSON.error("Failed to click status bar item", quiet: ctx.options.quiet)
         return UitoolExit.notFound.rawValue
     }
 
@@ -590,10 +683,23 @@ struct EventHelper {
             case "shift": flags.insert(.maskShift)
             case "alt", "option": flags.insert(.maskAlternate)
             case "ctrl", "control": flags.insert(.maskControl)
+            case "fn", "function": flags.insert(.maskSecondaryFn)
             default: keyPart = String(part)
             }
         }
-        guard let keyPart, let keyCode = KeyCodes.keyCode(for: keyPart) else { return false }
+        guard let keyPart else { return false }
+        let keyCode: CGKeyCode?
+        if keyPart.hasPrefix("raw:") {
+            let rawString = String(keyPart.dropFirst(4))
+            if let raw = Int(rawString) {
+                keyCode = CGKeyCode(raw)
+            } else {
+                keyCode = nil
+            }
+        } else {
+            keyCode = KeyCodes.keyCode(for: keyPart)
+        }
+        guard let keyCode else { return false }
         let down = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true)
         down?.flags = flags
         let up = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false)
@@ -640,6 +746,33 @@ struct FindOptions {
     var shouldClick = false
 }
 
+struct QueryOptions {
+    var role: String?
+    var title: String?
+    var text: String?
+    var identifier: String?
+    var windowTitle: String?
+}
+
+struct MenuMatchOptions {
+    var contains = false
+    var caseInsensitive = false
+    var normalizeEllipsis = false
+}
+
+struct MenuOptions {
+    var path: [String] = []
+    var match = MenuMatchOptions()
+    var listChildren = false
+}
+
+struct StatusBarOptions {
+    var name: String?
+    var match = MenuMatchOptions()
+    var listItems = false
+    var listMenu = false
+}
+
 func parseFindOptions(_ args: [String]) -> FindOptions {
     var options = FindOptions()
     var i = 0
@@ -674,6 +807,70 @@ func parseFindOptions(_ args: [String]) -> FindOptions {
             }
             i += 1
         }
+    }
+    return options
+}
+
+func parseQueryOptions(_ args: [String]) -> QueryOptions {
+    QueryOptions(
+        role: parseStringFlag(args, "--role"),
+        title: parseStringFlag(args, "--title"),
+        text: parseStringFlag(args, "--text"),
+        identifier: parseStringFlag(args, "--identifier"),
+        windowTitle: parseStringFlag(args, "--window")
+    )
+}
+
+func parseMenuOptions(_ args: [String]) -> MenuOptions {
+    var options = MenuOptions()
+    var i = 0
+    while i < args.count {
+        let arg = args[i]
+        switch arg {
+        case "--contains":
+            options.match.contains = true
+            i += 1
+        case "--case-insensitive":
+            options.match.caseInsensitive = true
+            i += 1
+        case "--normalize-ellipsis":
+            options.match.normalizeEllipsis = true
+            i += 1
+        case "--list":
+            options.listChildren = true
+            i += 1
+        default:
+            options.path.append(arg)
+            i += 1
+        }
+    }
+    return options
+}
+
+func parseStatusBarOptions(_ args: [String]) -> StatusBarOptions {
+    var options = StatusBarOptions()
+    var parts: [String] = []
+    var i = 0
+    while i < args.count {
+        let arg = args[i]
+        switch arg {
+        case "--contains":
+            options.match.contains = true
+        case "--case-insensitive":
+            options.match.caseInsensitive = true
+        case "--normalize-ellipsis":
+            options.match.normalizeEllipsis = true
+        case "--list":
+            options.listItems = true
+        case "--menu":
+            options.listMenu = true
+        default:
+            parts.append(arg)
+        }
+        i += 1
+    }
+    if !parts.isEmpty {
+        options.name = parts.joined(separator: " ")
     }
     return options
 }
@@ -721,13 +918,8 @@ func resolveRoot(options: GlobalOptions, windowTitle: String?) -> RootResolution
     guard let app = AXHelper.runningApp(options: options) else { return .appNotFound }
     let appElement = AXHelper.appElement(for: app)
     guard let windowTitle else { return .ok(app, appElement, [0]) }
-    let windows: [AXUIElement] = AXHelper.attribute(appElement, AXConst.Attr.windows) ?? []
-    for window in windows {
-        if let title = AXHelper.stringAttribute(window, AXConst.Attr.title),
-           title.localizedCaseInsensitiveContains(windowTitle) {
-            let path = AXHelper.findPath(to: window, in: appElement) ?? [0]
-            return .ok(app, window, path)
-        }
+    if let (window, path) = findWindowRoot(in: appElement, windowTitle: windowTitle) {
+        return .ok(app, window, path)
     }
     return .windowNotFound
 }
@@ -745,6 +937,18 @@ func withResolvedRoot(options: GlobalOptions, windowTitle: String?, quiet: Bool,
     }
 }
 
+func findWindowRoot(in appElement: AXUIElement, windowTitle: String) -> (AXUIElement, [Int])? {
+    let windows: [AXUIElement] = AXHelper.attribute(appElement, AXConst.Attr.windows) ?? []
+    for window in windows {
+        if let title = AXHelper.stringAttribute(window, AXConst.Attr.title),
+           title.localizedCaseInsensitiveContains(windowTitle) {
+            let path = AXHelper.findPath(to: window, in: appElement) ?? [0]
+            return (window, path)
+        }
+    }
+    return nil
+}
+
 func menuTree(_ element: AXUIElement, depth: Int) -> [[String: Any]] {
     guard depth > 0 else { return [] }
     let children = AXHelper.children(of: element)
@@ -758,18 +962,84 @@ func menuTree(_ element: AXUIElement, depth: Int) -> [[String: Any]] {
     }
 }
 
-func findMenuItem(menuBar: AXUIElement, path: [String]) -> AXUIElement? {
-    var currentElements = AXHelper.children(of: menuBar)
-    for (index, name) in path.enumerated() {
-        guard let match = currentElements.first(where: { (AXHelper.title(of: $0) ?? "") == name }) else { return nil }
-        if index == path.count - 1 { return match }
-        if let menu: AXUIElement = AXHelper.attribute(match, AXConst.Attr.menu) {
-            currentElements = AXHelper.children(of: menu)
-        } else {
-            currentElements = AXHelper.children(of: match)
+func normalizeMenuTitle(_ title: String, options: MenuMatchOptions) -> String {
+    var value = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    if options.normalizeEllipsis {
+        value = value.replacingOccurrences(of: "…", with: "...")
+    }
+    let parts = value.split(whereSeparator: { $0.isWhitespace })
+    value = parts.joined(separator: " ")
+    if options.caseInsensitive {
+        value = value.lowercased()
+    }
+    return value
+}
+
+func menuTitleMatches(_ candidate: String, _ query: String, options: MenuMatchOptions) -> Bool {
+    let lhs = normalizeMenuTitle(candidate, options: options)
+    let rhs = normalizeMenuTitle(query, options: options)
+    if options.contains {
+        return lhs.contains(rhs)
+    }
+    return lhs == rhs
+}
+
+func menuChildren(of element: AXUIElement) -> [AXUIElement] {
+    if let menu: AXUIElement = AXHelper.attribute(element, AXConst.Attr.menu) {
+        return AXHelper.children(of: menu)
+    }
+    return AXHelper.children(of: element)
+}
+
+func systemMenuBar() -> AXUIElement? {
+    let system = AXHelper.systemWideElement()
+    if let menuBar: AXUIElement = AXHelper.attribute(system, AXConst.Attr.menuBar) {
+        return menuBar
+    }
+    if let app = AXHelper.frontmostApp() {
+        let appElement = AXHelper.appElement(for: app)
+        return AXHelper.attribute(appElement, AXConst.Attr.menuBar)
+    }
+    return nil
+}
+
+func statusBarItems(in menuBar: AXUIElement) -> [AXUIElement] {
+    AXHelper.children(of: menuBar).filter { AXHelper.role(of: $0) == "AXMenuBarItem" }
+}
+
+func findStatusBarItem(_ items: [AXUIElement], name: String, match: MenuMatchOptions) -> AXUIElement? {
+    for item in items {
+        var candidates: [String] = []
+        if let title = AXHelper.stringAttribute(item, AXConst.Attr.title) { candidates.append(title) }
+        if let desc = AXHelper.stringAttribute(item, AXConst.Attr.description) { candidates.append(desc) }
+        if candidates.contains(where: { menuTitleMatches($0, name, options: match) }) {
+            return item
         }
     }
     return nil
+}
+
+func findMenuContainer(menuBar: AXUIElement, path: [String], match: MenuMatchOptions) -> AXUIElement? {
+    if path.isEmpty { return menuBar }
+    var currentElements = AXHelper.children(of: menuBar)
+    var current: AXUIElement?
+    for (index, name) in path.enumerated() {
+        guard let matchElement = currentElements.first(where: {
+            guard let title = AXHelper.stringAttribute($0, AXConst.Attr.title) else { return false }
+            return menuTitleMatches(title, name, options: match)
+        }) else { return nil }
+        current = matchElement
+        if index == path.count - 1 {
+            return matchElement
+        }
+        currentElements = menuChildren(of: matchElement)
+    }
+    return current
+}
+
+func findMenuItem(menuBar: AXUIElement, path: [String], match: MenuMatchOptions) -> AXUIElement? {
+    guard let container = findMenuContainer(menuBar: menuBar, path: path, match: match) else { return nil }
+    return container
 }
 
 func capture(rect: CGRect) -> CGImage? {

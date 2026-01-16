@@ -52,18 +52,80 @@ func usage() -> String {
     steve — Mac UI Automation CLI
 
     Commands: apps, focus, launch, quit, elements, find, element-at, click, click-at,
-              type, key, set-value, scroll, exists, wait, assert, windows, window,
-              menus, menu, screenshot
+              type, key, keys, set-value, scroll, exists, wait, assert, windows, window,
+              menus, menu, statusbar, screenshot
 
     Global options: --app, --pid, --bundle, --timeout, --verbose, --quiet
     """
 }
 
+func commandUsage(_ command: String) -> String? {
+    switch command {
+    case "key":
+        return """
+        steve key <shortcut>
+        steve key --raw <keycode>
+        steve key --list
+
+        Examples:
+          steve key f12
+          steve key fn+f12
+          steve key cmd+shift+p
+          steve key --raw 122
+        """
+    case "keys":
+        return "steve keys"
+    case "menu":
+        return """
+        steve menu [--contains] [--case-insensitive] [--normalize-ellipsis] <path...>
+        steve menu --list [--contains] [--case-insensitive] [--normalize-ellipsis] <path...>
+
+        Examples:
+          steve menu \"File\" \"New\"
+          steve menu --contains --case-insensitive \"settings...\"
+          steve menu --list \"File\"
+        """
+    case "statusbar":
+        return """
+        steve statusbar --list
+        steve statusbar [--contains] [--case-insensitive] [--normalize-ellipsis] <item>
+        steve statusbar --menu [--contains] [--case-insensitive] [--normalize-ellipsis] <item>
+
+        Examples:
+          steve statusbar --list
+          steve statusbar \"Wi-Fi\"
+          steve statusbar --menu --contains \"Battery\"
+        """
+    case "find":
+        return """
+        steve find [--role <role>] [--title <title>] [--text <text>] [--identifier <id>]
+                   [--window <title>] [--ancestor-role <role>] [--click]
+        """
+    case "exists":
+        return "steve exists [--role <role>] [--title <title>] [--text <text>] [--identifier <id>] [--window <title>]"
+    case "wait":
+        return "steve wait [--role <role>] [--title <title>] [--text <text>] [--identifier <id>] [--window <title>] [--gone] [--timeout <sec>]"
+    case "assert":
+        return "steve assert [--role <role>] [--title <title>] [--text <text>] [--identifier <id>] [--window <title>] [--enabled] [--checked] [--value <value>]"
+    default:
+        return nil
+    }
+}
+
+func hasHelpFlag(_ args: [String]) -> Bool {
+    args.contains("--help") || args.contains("-h") || args.contains("help")
+}
+
 func runCLI(args: [String]) -> Int32 {
     var args = args
     if args.isEmpty {
-        JSON.error(usage())
-        return UitoolExit.invalidArguments.rawValue
+        print(usage())
+        return UitoolExit.success.rawValue
+    }
+
+    if hasHelpFlag([args.first!]) {
+        print(usage())
+        return UitoolExit.success.rawValue
     }
 
     let command = args.removeFirst()
@@ -71,6 +133,11 @@ func runCLI(args: [String]) -> Int32 {
     if let error {
         JSON.error(error, quiet: options.quiet)
         return UitoolExit.invalidArguments.rawValue
+    }
+
+    if hasHelpFlag(args), let help = commandUsage(command) {
+        print(help)
+        return UitoolExit.success.rawValue
     }
 
     let ctx = CommandContext(options: options)
@@ -97,6 +164,8 @@ func runCLI(args: [String]) -> Int32 {
         return Commands.typeText(ctx: ctx, args: args)
     case "key":
         return Commands.key(ctx: ctx, args: args)
+    case "keys":
+        return Commands.keys(ctx: ctx)
     case "set-value":
         return Commands.setValue(ctx: ctx, args: args)
     case "scroll":
@@ -115,6 +184,8 @@ func runCLI(args: [String]) -> Int32 {
         return Commands.menus(ctx: ctx, args: args)
     case "menu":
         return Commands.menu(ctx: ctx, args: args)
+    case "statusbar":
+        return Commands.statusbar(ctx: ctx, args: args)
     case "screenshot":
         return Commands.screenshot(ctx: ctx, args: args)
     case "--help", "help", "-h":
