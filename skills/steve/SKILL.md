@@ -11,12 +11,11 @@ Use the `steve` CLI to automate macOS applications through the Accessibility API
 
 ## Quick Start
 
-1) Ensure Accessibility permissions are granted for the terminal running steve.  
-2) Build or use the release binary if needed:
+1. Assume the CLI is installed and available on `PATH`. If not, download it from the GitHub releases page: https://github.com/mikker/steve/releases
+2. Ensure Accessibility permissions are granted for the terminal running steve.
 
 ```bash
-swift build -c release
-./.build/release/steve apps
+steve apps
 ```
 
 ## Core Tasks
