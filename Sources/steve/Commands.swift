@@ -540,7 +540,7 @@ struct Commands {
             JSON.ok(children, quiet: ctx.options.quiet)
             return UitoolExit.success.rawValue
         }
-        if let target = findMenuItem(menuBar: menuBar, path: options.path, match: options.match) {
+        if let target = findMenuContainer(menuBar: menuBar, path: options.path, match: options.match) {
             if press(element: target) {
                 JSON.ok(quiet: ctx.options.quiet)
                 return UitoolExit.success.rawValue
@@ -677,13 +677,24 @@ struct EventHelper {
         let parts = shortcut.split(separator: "+").map { $0.lowercased() }
         var flags: CGEventFlags = []
         var keyPart: String?
+        var modifierKeyCodes: [CGKeyCode] = []
+        var hasFn = false
         for part in parts {
             switch part {
-            case "cmd", "command": flags.insert(.maskCommand)
-            case "shift": flags.insert(.maskShift)
-            case "alt", "option": flags.insert(.maskAlternate)
-            case "ctrl", "control": flags.insert(.maskControl)
-            case "fn", "function": flags.insert(.maskSecondaryFn)
+            case "cmd", "command":
+                flags.insert(.maskCommand)
+                modifierKeyCodes.append(55)
+            case "shift":
+                flags.insert(.maskShift)
+                modifierKeyCodes.append(56)
+            case "alt", "option":
+                flags.insert(.maskAlternate)
+                modifierKeyCodes.append(58)
+            case "ctrl", "control":
+                flags.insert(.maskControl)
+                modifierKeyCodes.append(59)
+            case "fn", "function":
+                hasFn = true
             default: keyPart = String(part)
             }
         }
@@ -700,12 +711,29 @@ struct EventHelper {
             keyCode = KeyCodes.keyCode(for: keyPart)
         }
         guard let keyCode else { return false }
-        let down = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true)
+        let isFunctionKey = keyPart.hasPrefix("f") && Int(keyPart.dropFirst()) != nil
+        let shouldSendFn = hasFn || isFunctionKey
+        if shouldSendFn {
+            flags.insert(.maskSecondaryFn)
+            modifierKeyCodes.append(63)
+        }
+        let source = CGEventSource(stateID: .hidSystemState)
+        for mod in modifierKeyCodes {
+            let modDown = CGEvent(keyboardEventSource: source, virtualKey: mod, keyDown: true)
+            modDown?.flags = flags
+            modDown?.post(tap: .cghidEventTap)
+        }
+        let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
         down?.flags = flags
-        let up = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false)
+        let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
         up?.flags = flags
         down?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)
+        for mod in modifierKeyCodes.reversed() {
+            let modUp = CGEvent(keyboardEventSource: source, virtualKey: mod, keyDown: false)
+            modUp?.flags = flags
+            modUp?.post(tap: .cghidEventTap)
+        }
         return true
     }
 
@@ -1022,24 +1050,17 @@ func findStatusBarItem(_ items: [AXUIElement], name: String, match: MenuMatchOpt
 func findMenuContainer(menuBar: AXUIElement, path: [String], match: MenuMatchOptions) -> AXUIElement? {
     if path.isEmpty { return menuBar }
     var currentElements = AXHelper.children(of: menuBar)
-    var current: AXUIElement?
     for (index, name) in path.enumerated() {
         guard let matchElement = currentElements.first(where: {
             guard let title = AXHelper.stringAttribute($0, AXConst.Attr.title) else { return false }
             return menuTitleMatches(title, name, options: match)
         }) else { return nil }
-        current = matchElement
         if index == path.count - 1 {
             return matchElement
         }
         currentElements = menuChildren(of: matchElement)
     }
-    return current
-}
-
-func findMenuItem(menuBar: AXUIElement, path: [String], match: MenuMatchOptions) -> AXUIElement? {
-    guard let container = findMenuContainer(menuBar: menuBar, path: path, match: match) else { return nil }
-    return container
+    return nil
 }
 
 func capture(rect: CGRect) -> CGImage? {

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-01-16
+
 ### Added
 - Function key support (F1–F24), `fn` modifier, and `key --raw`.
 - `key --list` and `keys` to list supported key names.
@@ -18,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Help/usage output is plain text by default.
+
+### Fixed
+- Function keys send an explicit `fn` key event for better reliability across apps.
 
 ## [0.1.0] - 2026-01-16
 
