@@ -51,7 +51,7 @@ func usage() -> String {
     """
     steve — Mac UI Automation CLI
 
-    Commands: apps, focus, launch, quit, elements, find, element-at, click, click-at,
+    Commands: apps, focus, launch, quit, elements, outline-rows, find, element-at, click, click-at,
               type, key, keys, set-value, scroll, exists, wait, assert, windows, window,
               menus, menu, statusbar, screenshot
 
@@ -99,7 +99,11 @@ func commandUsage(_ command: String) -> String? {
     case "find":
         return """
         steve find [--role <role>] [--title <title>] [--text <text>] [--identifier <id>]
-                   [--window <title>] [--ancestor-role <role>] [--click]
+                   [--window <title>] [--ancestor-role <role>] [--descendants|--desc] [--click]
+        """
+    case "outline-rows":
+        return """
+        steve outline-rows [--outline <title>] [--window <title>]
         """
     case "exists":
         return "steve exists [--role <role>] [--title <title>] [--text <text>] [--identifier <id>] [--window <title>]"
@@ -152,6 +156,8 @@ func runCLI(args: [String]) -> Int32 {
         return Commands.quit(ctx: ctx, args: args)
     case "elements":
         return Commands.elements(ctx: ctx, args: args)
+    case "outline-rows":
+        return Commands.outlineRows(ctx: ctx, args: args)
     case "find":
         return Commands.find(ctx: ctx, args: args)
     case "element-at":

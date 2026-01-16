@@ -3,11 +3,12 @@ import XCTest
 
 final class FindOptionsTests: XCTestCase {
     func testParseFindOptionsTextWindowAncestorClick() {
-        let args = ["--text", "Dictation Mode", "--window", "Settings", "--ancestor-role", "AXRow", "--click"]
+        let args = ["--text", "Dictation Mode", "--window", "Settings", "--ancestor-role", "AXRow", "--desc", "--click"]
         let options = parseFindOptions(args)
         XCTAssertEqual(options.text, "Dictation Mode")
         XCTAssertEqual(options.windowTitle, "Settings")
         XCTAssertEqual(options.ancestorRole, "AXRow")
+        XCTAssertTrue(options.textDescendants)
         XCTAssertTrue(options.shouldClick)
         XCTAssertNil(options.role)
     }

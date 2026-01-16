@@ -118,6 +118,44 @@ struct Commands {
         }
     }
 
+    static func outlineRows(ctx: CommandContext, args: [String]) -> Int32 {
+        guard AXHelper.ensureTrusted() else {
+            JSON.error("Accessibility permission denied", quiet: ctx.options.quiet)
+            return UitoolExit.permissionDenied.rawValue
+        }
+        let outlineTitle = parseStringFlag(args, "--outline")
+        let windowTitle = parseStringFlag(args, "--window")
+        return withResolvedRoot(options: ctx.options, windowTitle: windowTitle, quiet: ctx.options.quiet) { app, root, _ in
+            guard let outline = findOutline(in: root, title: outlineTitle) else {
+                JSON.error("Outline not found", quiet: ctx.options.quiet)
+                return UitoolExit.notFound.rawValue
+            }
+            let rows = outlineRowElements(in: outline)
+            let selectedRows: [AXUIElement] = AXHelper.attribute(outline, AXConst.Attr.selectedRows) ?? []
+            let selectedRowIds = Set(selectedRows.map { ObjectIdentifier($0) })
+            let appElement = AXHelper.appElement(for: app)
+            let data = rows.enumerated().map { index, row -> [String: Any] in
+                var dict: [String: Any] = ["index": index]
+                if let role = AXHelper.role(of: row) { dict["role"] = role }
+                if let enabled = AXHelper.boolAttribute(row, AXConst.Attr.enabled) { dict["enabled"] = enabled }
+                if !selectedRowIds.isEmpty {
+                    let isSelected = selectedRowIds.contains(ObjectIdentifier(row))
+                    dict["selected"] = isSelected
+                } else if let selected = AXHelper.boolAttribute(row, AXConst.Attr.selected) {
+                    dict["selected"] = selected
+                }
+                let labels = AXHelper.collectText(from: row)
+                if !labels.isEmpty { dict["label"] = labels.joined(separator: " · ") }
+                if let path = AXHelper.findPath(to: row, in: appElement) {
+                    dict["id"] = AXHelper.elementId(pid: app.processIdentifier, path: path)
+                }
+                return dict
+            }
+            JSON.ok(data, quiet: ctx.options.quiet)
+            return UitoolExit.success.rawValue
+        }
+    }
+
     static func find(ctx: CommandContext, args: [String]) -> Int32 {
         guard AXHelper.ensureTrusted() else {
             JSON.error("Accessibility permission denied", quiet: ctx.options.quiet)
@@ -125,7 +163,15 @@ struct Commands {
         }
         let options = parseFindOptions(args)
         return withResolvedRoot(options: ctx.options, windowTitle: options.windowTitle, quiet: ctx.options.quiet) { app, root, path in
-            let matches = AXHelper.findElements(root: root, rootPath: path, role: options.role, title: options.title, identifier: options.identifier, text: options.text)
+            let matches = AXHelper.findElements(
+                root: root,
+                rootPath: path,
+                role: options.role,
+                title: options.title,
+                identifier: options.identifier,
+                text: options.text,
+                textDescendants: options.textDescendants
+            )
             if matches.isEmpty {
                 JSON.error("Element not found", quiet: ctx.options.quiet)
                 return UitoolExit.notFound.rawValue
@@ -645,16 +691,10 @@ struct Commands {
 }
 
 struct EventHelper {
-    static func toCGEventPoint(_ point: CGPoint) -> CGPoint {
-        guard let screen = NSScreen.main else { return point }
-        return CGPoint(x: point.x, y: screen.frame.height - point.y)
-    }
-
     static func click(at point: CGPoint, button: CGMouseButton = .left, clickCount: Int = 1) {
-        let converted = toCGEventPoint(point)
-        let down = CGEvent(mouseEventSource: nil, mouseType: button == .left ? .leftMouseDown : .rightMouseDown, mouseCursorPosition: converted, mouseButton: button)
+        let down = CGEvent(mouseEventSource: nil, mouseType: button == .left ? .leftMouseDown : .rightMouseDown, mouseCursorPosition: point, mouseButton: button)
         down?.setIntegerValueField(.mouseEventClickState, value: Int64(clickCount))
-        let up = CGEvent(mouseEventSource: nil, mouseType: button == .left ? .leftMouseUp : .rightMouseUp, mouseCursorPosition: converted, mouseButton: button)
+        let up = CGEvent(mouseEventSource: nil, mouseType: button == .left ? .leftMouseUp : .rightMouseUp, mouseCursorPosition: point, mouseButton: button)
         up?.setIntegerValueField(.mouseEventClickState, value: Int64(clickCount))
         down?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)
@@ -771,6 +811,7 @@ struct FindOptions {
     var identifier: String?
     var windowTitle: String?
     var ancestorRole: String?
+    var textDescendants = false
     var shouldClick = false
 }
 
@@ -825,6 +866,9 @@ func parseFindOptions(_ args: [String]) -> FindOptions {
         case "--ancestor-role":
             if i + 1 < args.count { options.ancestorRole = args[i + 1] }
             i += 2
+        case "--descendants", "--desc":
+            options.textDescendants = true
+            i += 1
         case "--click":
             options.shouldClick = true
             i += 1
@@ -975,6 +1019,37 @@ func findWindowRoot(in appElement: AXUIElement, windowTitle: String) -> (AXUIEle
         }
     }
     return nil
+}
+
+func findOutline(in root: AXUIElement, title: String?) -> AXUIElement? {
+    var outlines: [AXUIElement] = []
+    func walk(_ element: AXUIElement) {
+        if AXHelper.role(of: element) == "AXOutline" {
+            outlines.append(element)
+        }
+        for child in AXHelper.children(of: element) {
+            walk(child)
+        }
+    }
+    walk(root)
+    guard let title, !title.isEmpty else { return outlines.first }
+    return outlines.first(where: {
+        (AXHelper.title(of: $0) ?? "").localizedCaseInsensitiveContains(title)
+    })
+}
+
+func outlineRowElements(in outline: AXUIElement) -> [AXUIElement] {
+    var rows: [AXUIElement] = []
+    func walk(_ element: AXUIElement) {
+        if AXHelper.role(of: element) == "AXRow" {
+            rows.append(element)
+        }
+        for child in AXHelper.children(of: element) {
+            walk(child)
+        }
+    }
+    walk(outline)
+    return rows
 }
 
 func menuTree(_ element: AXUIElement, depth: Int) -> [[String: Any]] {

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-01-16
+
+### Added
+- `outline-rows` to list outline rows with accessible labels and selection state.
+- `find --descendants`/`--desc` to match `--text` against descendant content.
+
+### Changed
+- Text matching now considers headings for SwiftUI lists.
+
+### Fixed
+- Click coordinates now align with AX element frames (no y-axis flip).
+
 ## [0.2.0] - 2026-01-16
 
 ### Added

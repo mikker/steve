@@ -16,6 +16,7 @@ enum AXConst {
         static let focusedWindow: CFString = "AXFocusedWindow" as CFString
         static let value: CFString = "AXValue" as CFString
         static let selected: CFString = "AXSelected" as CFString
+        static let selectedRows: CFString = "AXSelectedRows" as CFString
         static let main: CFString = "AXMain" as CFString
         static let minimized: CFString = "AXMinimized" as CFString
         static let fullScreen: CFString = "AXFullScreen" as CFString
@@ -128,13 +129,55 @@ struct AXHelper {
         return nil
     }
 
-    static func matchesText(element: AXUIElement, role: String, text: String) -> Bool {
-        let needle = text.lowercased()
+    static func textCandidates(for element: AXUIElement, role: String) -> [String] {
         var candidates: [String] = []
         if let value = stringAttribute(element, AXConst.Attr.value) { candidates.append(value) }
         if let desc = stringAttribute(element, AXConst.Attr.description) { candidates.append(desc) }
-        if role == "AXStaticText", let title = stringAttribute(element, AXConst.Attr.title) { candidates.append(title) }
-        return candidates.contains { $0.lowercased().contains(needle) }
+        if role == "AXStaticText" || role == "AXHeading",
+           let title = stringAttribute(element, AXConst.Attr.title) {
+            candidates.append(title)
+        }
+        return candidates
+    }
+
+    static func matchesText(element: AXUIElement, role: String, text: String, includeDescendants: Bool = false) -> Bool {
+        matchesText(element: element, role: role, needle: text.lowercased(), includeDescendants: includeDescendants)
+    }
+
+    private static func matchesText(element: AXUIElement, role: String, needle: String, includeDescendants: Bool) -> Bool {
+        let candidates = textCandidates(for: element, role: role)
+        if candidates.contains(where: { $0.lowercased().contains(needle) }) { return true }
+        guard includeDescendants else { return false }
+        for child in children(of: element) {
+            let childRole = self.role(of: child) ?? ""
+            if matchesText(element: child, role: childRole, needle: needle, includeDescendants: true) {
+                return true
+            }
+        }
+        return false
+    }
+
+    static func collectText(from element: AXUIElement, limit: Int = 6) -> [String] {
+        var results: [String] = []
+        func add(_ value: String) {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !results.contains(trimmed) else { return }
+            results.append(trimmed)
+        }
+        func walk(_ element: AXUIElement) {
+            if results.count >= limit { return }
+            let role = self.role(of: element) ?? ""
+            for candidate in textCandidates(for: element, role: role) {
+                add(candidate)
+                if results.count >= limit { return }
+            }
+            for child in children(of: element) {
+                walk(child)
+                if results.count >= limit { return }
+            }
+        }
+        walk(element)
+        return results
     }
 
     static func elementInfo(element: AXUIElement, pid: pid_t, path: [Int], depth: Int) -> [String: Any] {
@@ -211,7 +254,7 @@ struct AXHelper {
         return "AX" + input
     }
 
-    static func match(element: AXUIElement, role: String?, title: String?, identifier: String?, text: String?) -> Bool {
+    static func match(element: AXUIElement, role: String?, title: String?, identifier: String?, text: String?, textDescendants: Bool) -> Bool {
         let actualRole = self.role(of: element) ?? ""
         if let role {
             if normalizeRole(role) != actualRole { return false }
@@ -223,15 +266,15 @@ struct AXHelper {
             if identifier != (self.identifier(of: element) ?? "") { return false }
         }
         if let text {
-            if !matchesText(element: element, role: actualRole, text: text) { return false }
+            if !matchesText(element: element, role: actualRole, text: text, includeDescendants: textDescendants) { return false }
         }
         return true
     }
 
-    static func findElements(root: AXUIElement, rootPath: [Int] = [0], role: String?, title: String?, identifier: String?, text: String?) -> [(AXUIElement, [Int])] {
+    static func findElements(root: AXUIElement, rootPath: [Int] = [0], role: String?, title: String?, identifier: String?, text: String?, textDescendants: Bool = false) -> [(AXUIElement, [Int])] {
         var matches: [(AXUIElement, [Int])] = []
         func walk(_ element: AXUIElement, _ path: [Int]) {
-            if match(element: element, role: role, title: title, identifier: identifier, text: text) {
+            if match(element: element, role: role, title: title, identifier: identifier, text: text, textDescendants: textDescendants) {
                 matches.append((element, path))
             }
             let kids = children(of: element)
