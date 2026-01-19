@@ -10,7 +10,15 @@ permissions:
 
 jobs:
   build-macos:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-13
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,12 +30,93 @@ jobs:
         run: |
           mkdir -p dist
           bin_name=steve
-          arch=$(uname -m)
+          arch=${{ matrix.arch }}
           cp .build/release/${bin_name} dist/${bin_name}
           chmod +x dist/${bin_name}
           (cd dist && tar -czf ${bin_name}-macos-${arch}.tar.gz ${bin_name})
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: steve-${{ matrix.arch }}
+          path: dist/*.tar.gz
+
+  release:
+    needs: build-macos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.tar.gz
+
+  update-homebrew-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tap
+        uses: actions/checkout@v4
+        with:
+          repository: mikker/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN || github.token }}
+          path: tap
+
+      - name: Update formula
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          arm_url="https://github.com/mikker/steve/releases/download/${TAG}/steve-macos-arm64.tar.gz"
+          intel_url="https://github.com/mikker/steve/releases/download/${TAG}/steve-macos-x86_64.tar.gz"
+          arm_sha=$(curl -fsSL "${arm_url}" | shasum -a 256 | awk '{print $1}')
+          intel_sha=$(curl -fsSL "${intel_url}" | shasum -a 256 | awk '{print $1}')
+
+          cat > tap/Formula/steve.rb <<EOF
+          class Steve < Formula
+            desc "CLI for driving Mac applications via the Accessibility API"
+            homepage "https://github.com/mikker/steve"
+            license "MIT"
+          
+            if Hardware::CPU.arm?
+              url "${arm_url}"
+              sha256 "${arm_sha}"
+            else
+              url "${intel_url}"
+              sha256 "${intel_sha}"
+            end
+
+            depends_on :macos
+
+            def install
+              bin.install "steve"
+            end
+
+            test do
+              system bin/"steve", "--help"
+            end
+          end
+          EOF
+
+      - name: Commit and push
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/steve.rb
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Update steve to ${version}"
+          git push
