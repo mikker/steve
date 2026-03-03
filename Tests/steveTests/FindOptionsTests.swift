@@ -13,9 +13,20 @@ final class FindOptionsTests: XCTestCase {
         XCTAssertNil(options.role)
     }
 
-    func testParseFindOptionsPositionalRole() {
-        let options = parseFindOptions(["AXButton"])
+    func testParseFindOptionsPositionalQuery() {
+        let options = parseFindOptions(["Dictation Mode"])
+        XCTAssertEqual(options.text, "Dictation Mode")
+        XCTAssertNil(options.role)
+    }
+
+    func testParseFindOptionsExplicitRole() {
+        let options = parseFindOptions(["--role", "AXButton"])
         XCTAssertEqual(options.role, "AXButton")
+    }
+
+    func testParseFindOptionsQueryAlias() {
+        let options = parseFindOptions(["--query", "Battery"])
+        XCTAssertEqual(options.text, "Battery")
     }
 
     func testParseFindOptionsWindowDoesNotSetRole() {

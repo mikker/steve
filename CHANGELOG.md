@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Targeting by app or executable path with global `--app-path` and `--exec-path`.
+- Target handle support via global `--target app://<pid>`.
+- `resolve`/`attach` command for unambiguous target metadata (`pid`, `bundleId`, app path, executable path, window count, frontmost flag, and reusable target handle).
+- Interaction preconditions `--activate` and `--frontmost` for `click`, `type`, and `key`.
+- `focused` command to return the currently focused UI element for a target app.
+- `selection` command to return current selection state (`selectedText`, `selectedRows`, `selectedChildren`, focused element context).
+- `wait`/`wait-for` support for `--window-count` and `--element-id`.
+- `snapshot` command to capture app tree state (including target metadata and window count) to stdout or JSON file.
+- `diff` command to compare two snapshots and report added/removed/changed nodes.
+- Global `--jsonl-trace[=<path>]` command tracing and a JSONL trace sink for resolved targets, matching, and interaction events.
+- `find --query <text>` as an alias for text-based search.
+
+### Changed
+- `find <query>` now treats positional argument as text query instead of role.
+- Text matching now searches `AXTitle`, `AXValue`, `AXDescription`, and `AXIdentifier` by default.
+- `apps` output now includes `appPath`, `executablePath`, and `frontmost`.
+- Element output now includes `value` and `description` where available.
+- Global usage/help output now includes new commands and global options.
+
+### Fixed
+- `--jsonl-trace` now accepts an optional path without accidentally consuming the next command token.
+- Interaction targeting with `--activate`/`--frontmost` now supports id-based clicks by deriving app context from `ax://...` element ids.
+
 ## [0.4.0] - 2026-01-19
 
 ### Added

@@ -24,6 +24,23 @@ func parseGlobalOptions(_ args: inout [String]) -> (GlobalOptions, String?) {
             options.bundleId = args[i + 1]
             args.removeSubrange(i...i + 1)
             continue
+        case "--app-path":
+            guard i + 1 < args.count else { return (options, "Missing value for --app-path") }
+            options.appPath = args[i + 1]
+            args.removeSubrange(i...i + 1)
+            continue
+        case "--exec-path":
+            guard i + 1 < args.count else { return (options, "Missing value for --exec-path") }
+            options.executablePath = args[i + 1]
+            args.removeSubrange(i...i + 1)
+            continue
+        case "--target":
+            guard i + 1 < args.count else { return (options, "Missing value for --target") }
+            guard parseTargetHandle(args[i + 1], into: &options) else {
+                return (options, "Invalid target handle")
+            }
+            args.removeSubrange(i...i + 1)
+            continue
         case "--timeout":
             guard i + 1 < args.count else { return (options, "Missing value for --timeout") }
             if let t = Double(args[i + 1]) {
@@ -51,11 +68,45 @@ func parseGlobalOptions(_ args: inout [String]) -> (GlobalOptions, String?) {
             options.format = .json
             args.remove(at: i)
             continue
+        case "--jsonl-trace":
+            options.traceJSONL = true
+            if i + 1 < args.count, looksLikeTracePath(args[i + 1]) {
+                options.tracePath = args[i + 1]
+                args.removeSubrange(i...i + 1)
+            } else {
+                args.remove(at: i)
+            }
+            continue
         default:
             if arg.hasPrefix("--format=") {
                 let value = String(arg.dropFirst("--format=".count))
                 guard let format = parseOutputFormat(value) else { return (options, "Invalid format") }
                 options.format = format
+                args.remove(at: i)
+                continue
+            }
+            if arg.hasPrefix("--app-path=") {
+                options.appPath = String(arg.dropFirst("--app-path=".count))
+                args.remove(at: i)
+                continue
+            }
+            if arg.hasPrefix("--exec-path=") {
+                options.executablePath = String(arg.dropFirst("--exec-path=".count))
+                args.remove(at: i)
+                continue
+            }
+            if arg.hasPrefix("--jsonl-trace=") {
+                let value = String(arg.dropFirst("--jsonl-trace=".count))
+                options.traceJSONL = true
+                options.tracePath = value.isEmpty ? nil : value
+                args.remove(at: i)
+                continue
+            }
+            if arg.hasPrefix("--target=") {
+                let value = String(arg.dropFirst("--target=".count))
+                guard parseTargetHandle(value, into: &options) else {
+                    return (options, "Invalid target handle")
+                }
                 args.remove(at: i)
                 continue
             }
@@ -69,11 +120,13 @@ func usage() -> String {
     """
     steve - Mac UI Automation CLI
 
-    Commands: apps, focus, launch, quit, elements, outline-rows, find, element-at, click, click-at,
-              type, key, keys, set-value, scroll, exists, wait, assert, windows, window,
-              menus, menu, statusbar, screenshot
+    Commands: apps, resolve, attach, focus, launch, quit, elements, outline-rows, find, element-at,
+              click, click-at, type, key, keys, set-value, scroll, exists, wait, wait-for, assert,
+              focused, selection, windows, window, menus, menu, statusbar, snapshot, diff, screenshot
 
-    Global options: --app, --pid, --bundle, --timeout, --verbose, --quiet, --format <text|json>, -j
+    Global options: --app, --pid, --bundle, --app-path, --exec-path, --target,
+                    --timeout, --verbose, --quiet, --format <text|json>, -j,
+                    --jsonl-trace[=<path>]
     """
 }
 
@@ -119,6 +172,12 @@ func commandUsage(_ command: String) -> String? {
         steve find [--role <role>] [--title <title>] [--text <text>] [--identifier <id>]
                    [--window <title>] [--ancestor-role <role>] [--descendants|--desc] [--click]
         """
+    case "resolve", "attach":
+        return "steve resolve [--app|--pid|--bundle|--app-path|--exec-path]"
+    case "focused":
+        return "steve focused [--app|--pid|--bundle|--app-path|--exec-path]"
+    case "selection":
+        return "steve selection [--app|--pid|--bundle|--app-path|--exec-path]"
     case "outline-rows":
         return """
         steve outline-rows [--outline <title>] [--window <title>]
@@ -126,9 +185,15 @@ func commandUsage(_ command: String) -> String? {
     case "exists":
         return "steve exists [--role <role>] [--title <title>] [--text <text>] [--identifier <id>] [--window <title>]"
     case "wait":
-        return "steve wait [--role <role>] [--title <title>] [--text <text>] [--identifier <id>] [--window <title>] [--gone] [--timeout <sec>]"
+        return "steve wait [--role <role>] [--title <title>] [--text <text>] [--identifier <id>] [--window <title>] [--element-id <id>] [--window-count <n>] [--gone] [--timeout <sec>]"
+    case "wait-for":
+        return "steve wait-for [--role <role>] [--title <title>] [--text <text>] [--identifier <id>] [--window <title>] [--element-id <id>] [--window-count <n>] [--gone] [--timeout <sec>]"
     case "assert":
         return "steve assert [--role <role>] [--title <title>] [--text <text>] [--identifier <id>] [--window <title>] [--enabled] [--checked] [--value <value>]"
+    case "snapshot":
+        return "steve snapshot [--depth <n>] [--output <path>]"
+    case "diff":
+        return "steve diff <before.json> <after.json>"
     default:
         return nil
     }
@@ -153,6 +218,7 @@ func runCLI(args: [String]) -> Int32 {
     let command = args.removeFirst()
     let (options, error) = parseGlobalOptions(&args)
     Output.configure(format: options.format)
+    Trace.configure(enabled: options.traceJSONL, path: options.tracePath)
     if let error {
         Output.error(error, quiet: options.quiet)
         return UitoolExit.invalidArguments.rawValue
@@ -164,9 +230,12 @@ func runCLI(args: [String]) -> Int32 {
     }
 
     let ctx = CommandContext(options: options)
+    Trace.log(["event": "command.start", "command": command, "args": args])
     switch command {
     case "apps":
         return Commands.apps(ctx: ctx)
+    case "resolve", "attach":
+        return Commands.resolve(ctx: ctx, args: args)
     case "focus":
         return Commands.focus(ctx: ctx, args: args)
     case "launch":
@@ -199,8 +268,14 @@ func runCLI(args: [String]) -> Int32 {
         return Commands.exists(ctx: ctx, args: args)
     case "wait":
         return Commands.wait(ctx: ctx, args: args)
+    case "wait-for":
+        return Commands.wait(ctx: ctx, args: args)
     case "assert":
         return Commands.assert(ctx: ctx, args: args)
+    case "focused":
+        return Commands.focused(ctx: ctx, args: args)
+    case "selection":
+        return Commands.selection(ctx: ctx, args: args)
     case "windows":
         return Commands.windows(ctx: ctx, args: args)
     case "window":
@@ -211,6 +286,10 @@ func runCLI(args: [String]) -> Int32 {
         return Commands.menu(ctx: ctx, args: args)
     case "statusbar":
         return Commands.statusbar(ctx: ctx, args: args)
+    case "snapshot":
+        return Commands.snapshot(ctx: ctx, args: args)
+    case "diff":
+        return Commands.diff(ctx: ctx, args: args)
     case "screenshot":
         return Commands.screenshot(ctx: ctx, args: args)
     case "--help", "help", "-h":
@@ -231,4 +310,24 @@ private func parseOutputFormat(_ value: String) -> OutputFormat? {
     default:
         return nil
     }
+}
+
+private func parseTargetHandle(_ value: String, into options: inout GlobalOptions) -> Bool {
+    if let pid = Int32(value) {
+        options.pid = pid
+        return true
+    }
+    if value.hasPrefix("app://") {
+        let pidString = String(value.dropFirst("app://".count))
+        if let pid = Int32(pidString) {
+            options.pid = pid
+            return true
+        }
+        return false
+    }
+    return false
+}
+
+private func looksLikeTracePath(_ value: String) -> Bool {
+    value.hasPrefix("/") || value.hasPrefix("./") || value.hasPrefix("../") || value.hasPrefix("~") || value.hasSuffix(".jsonl")
 }

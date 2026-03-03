@@ -13,18 +13,34 @@ struct Commands {
             [
                 "name": app.localizedName ?? "",
                 "pid": Int(app.processIdentifier),
-                "bundleId": app.bundleIdentifier ?? ""
+                "bundleId": app.bundleIdentifier ?? "",
+                "appPath": AXHelper.resolvedPath(app.bundleURL?.path) ?? "",
+                "executablePath": AXHelper.resolvedPath(app.executableURL?.path) ?? "",
+                "frontmost": app.processIdentifier == AXHelper.frontmostApp()?.processIdentifier
             ]
         }
         Output.ok(data, quiet: ctx.options.quiet)
         return UitoolExit.success.rawValue
     }
 
-    static func focus(ctx: CommandContext, args: [String]) -> Int32 {
-        var options = ctx.options
-        if !hasTarget(options), let name = firstPositionalArg(args) {
-            options.appName = name
+    static func resolve(ctx: CommandContext, args: [String]) -> Int32 {
+        guard AXHelper.ensureTrusted() else {
+            Output.error("Accessibility permission denied", quiet: ctx.options.quiet)
+            return UitoolExit.permissionDenied.rawValue
         }
+        let options = optionsWithPositionalTarget(ctx.options, args: args)
+        guard let app = AXHelper.runningApp(options: options) else {
+            Output.error("App not found", quiet: ctx.options.quiet)
+            return UitoolExit.appNotFound.rawValue
+        }
+        let data = resolvedTargetData(app)
+        Trace.log(["event": "target.resolved", "target": data])
+        Output.ok(data, quiet: ctx.options.quiet)
+        return UitoolExit.success.rawValue
+    }
+
+    static func focus(ctx: CommandContext, args: [String]) -> Int32 {
+        let options = optionsWithPositionalTarget(ctx.options, args: args)
         guard let app = AXHelper.runningApp(options: options) else {
             Output.error("App not found", quiet: ctx.options.quiet)
             return UitoolExit.appNotFound.rawValue
@@ -36,6 +52,67 @@ struct Commands {
         }
         Output.error("Failed to focus app", quiet: ctx.options.quiet)
         return UitoolExit.appNotFound.rawValue
+    }
+
+    static func focused(ctx: CommandContext, args: [String]) -> Int32 {
+        guard AXHelper.ensureTrusted() else {
+            Output.error("Accessibility permission denied", quiet: ctx.options.quiet)
+            return UitoolExit.permissionDenied.rawValue
+        }
+        let options = optionsWithPositionalTarget(ctx.options, args: args)
+        guard let app = AXHelper.runningApp(options: options) else {
+            Output.error("App not found", quiet: ctx.options.quiet)
+            return UitoolExit.appNotFound.rawValue
+        }
+        let appElement = AXHelper.appElement(for: app)
+        guard let focusedElement: AXUIElement = AXHelper.attribute(appElement, AXConst.Attr.focusedUIElement) else {
+            Output.error("Focused element not found", quiet: ctx.options.quiet)
+            return UitoolExit.notFound.rawValue
+        }
+        let target = resolvedTargetData(app)
+        var data = elementSummary(focusedElement, pid: app.processIdentifier, appElement: appElement)
+        data["target"] = target
+        Trace.log(["event": "focused.read", "target": target, "element": data])
+        Output.ok(data, quiet: ctx.options.quiet)
+        return UitoolExit.success.rawValue
+    }
+
+    static func selection(ctx: CommandContext, args: [String]) -> Int32 {
+        guard AXHelper.ensureTrusted() else {
+            Output.error("Accessibility permission denied", quiet: ctx.options.quiet)
+            return UitoolExit.permissionDenied.rawValue
+        }
+        let options = optionsWithPositionalTarget(ctx.options, args: args)
+        guard let app = AXHelper.runningApp(options: options) else {
+            Output.error("App not found", quiet: ctx.options.quiet)
+            return UitoolExit.appNotFound.rawValue
+        }
+        let appElement = AXHelper.appElement(for: app)
+        let focusedElement: AXUIElement? = AXHelper.attribute(appElement, AXConst.Attr.focusedUIElement)
+        let scope = focusedElement ?? focusedWindow(for: app) ?? appElement
+
+        let target = resolvedTargetData(app)
+        var data: [String: Any] = ["target": target]
+        if let focusedElement {
+            data["focused"] = elementSummary(focusedElement, pid: app.processIdentifier, appElement: appElement)
+        }
+        if let selectedText: String = AXHelper.attribute(scope, AXConst.Attr.selectedText) {
+            data["selectedText"] = selectedText
+        }
+        if let selected: Bool = AXHelper.boolAttribute(scope, AXConst.Attr.selected) {
+            data["selected"] = selected
+        }
+        let selectedRows: [AXUIElement] = AXHelper.attribute(scope, AXConst.Attr.selectedRows) ?? []
+        if !selectedRows.isEmpty {
+            data["selectedRows"] = selectedRows.map { elementSummary($0, pid: app.processIdentifier, appElement: appElement) }
+        }
+        let selectedChildren: [AXUIElement] = AXHelper.attribute(scope, AXConst.Attr.selectedChildren) ?? []
+        if !selectedChildren.isEmpty {
+            data["selectedChildren"] = selectedChildren.map { elementSummary($0, pid: app.processIdentifier, appElement: appElement) }
+        }
+        Trace.log(["event": "selection.read", "target": target, "selection": data])
+        Output.ok(data, quiet: ctx.options.quiet)
+        return UitoolExit.success.rawValue
     }
 
     static func launch(ctx: CommandContext, args: [String]) -> Int32 {
@@ -87,10 +164,7 @@ struct Commands {
 
     static func quit(ctx: CommandContext, args: [String]) -> Int32 {
         let force = args.contains("--force")
-        var options = ctx.options
-        if !hasTarget(options), let name = firstPositionalArg(args) {
-            options.appName = name
-        }
+        let options = optionsWithPositionalTarget(ctx.options, args: args)
         guard let app = AXHelper.runningApp(options: options) else {
             Output.error("App not found", quiet: ctx.options.quiet)
             return UitoolExit.appNotFound.rawValue
@@ -173,6 +247,11 @@ struct Commands {
                 textDescendants: options.textDescendants
             )
             if matches.isEmpty {
+                Trace.log([
+                    "event": "find",
+                    "query": ["role": options.role ?? "", "title": options.title ?? "", "identifier": options.identifier ?? "", "text": options.text ?? ""],
+                    "result": "not_found"
+                ])
                 Output.error("Element not found", quiet: ctx.options.quiet)
                 return UitoolExit.notFound.rawValue
             }
@@ -192,6 +271,12 @@ struct Commands {
                     return UitoolExit.notFound.rawValue
                 }
             }
+            Trace.log([
+                "event": "find",
+                "query": ["role": options.role ?? "", "title": options.title ?? "", "identifier": options.identifier ?? "", "text": options.text ?? ""],
+                "count": matches.count,
+                "matchedElementId": AXHelper.elementId(pid: app.processIdentifier, path: matches[0].1)
+            ])
             let data = matches.map { element, matchPath in
                 AXHelper.elementInfo(element: element, pid: app.processIdentifier, path: matchPath, depth: 0)
             }
@@ -230,35 +315,51 @@ struct Commands {
             Output.error("Accessibility permission denied", quiet: ctx.options.quiet)
             return UitoolExit.permissionDenied.rawValue
         }
-        if let id = args.first, id.hasPrefix("ax://") {
+        let interaction = parseInteractionOptions(args)
+        let filteredArgs = removingFlags(args, ["--activate", "--frontmost"])
+        if let id = filteredArgs.first, id.hasPrefix("ax://") {
+            if let code = prepareInteraction(options: ctx.options, interaction: interaction, quiet: ctx.options.quiet, elementId: id) {
+                return code
+            }
             guard let element = AXHelper.elementFromId(id) else {
                 Output.error("Element not found", quiet: ctx.options.quiet)
                 return UitoolExit.notFound.rawValue
             }
             if press(element: element) {
+                Trace.log(["event": "click", "elementId": id, "action": "press", "result": "success"])
                 Output.ok(quiet: ctx.options.quiet)
                 return UitoolExit.success.rawValue
             }
             if let frame = AXHelper.frame(of: element) {
                 EventHelper.click(at: CGPoint(x: frame.midX, y: frame.midY))
+                Trace.log(["event": "click", "elementId": id, "action": "coord", "result": "success"])
                 Output.ok(quiet: ctx.options.quiet)
                 return UitoolExit.success.rawValue
             }
             Output.error("Failed to click element", quiet: ctx.options.quiet)
             return UitoolExit.notFound.rawValue
         }
-        let role = parseStringFlag(args, "--role")
-        let title = parseStringFlag(args, "--title")
-        let text = parseStringFlag(args, "--text")
-        let identifier = parseStringFlag(args, "--identifier")
-        let windowTitle = parseStringFlag(args, "--window")
-        return withResolvedRoot(options: ctx.options, windowTitle: windowTitle, quiet: ctx.options.quiet) { _, root, path in
+        if let code = prepareInteraction(options: ctx.options, interaction: interaction, quiet: ctx.options.quiet) {
+            return code
+        }
+        let role = parseStringFlag(filteredArgs, "--role")
+        let title = parseStringFlag(filteredArgs, "--title")
+        let text = parseStringFlag(filteredArgs, "--text")
+        let identifier = parseStringFlag(filteredArgs, "--identifier")
+        let windowTitle = parseStringFlag(filteredArgs, "--window")
+        return withResolvedRoot(options: ctx.options, windowTitle: windowTitle, quiet: ctx.options.quiet) { app, root, path in
             let matches = AXHelper.findElements(root: root, rootPath: path, role: role, title: title, identifier: identifier, text: text)
             guard let target = matches.first?.0 else {
                 Output.error("Element not found", quiet: ctx.options.quiet)
                 return UitoolExit.notFound.rawValue
             }
             if tryClick(target) {
+                Trace.log([
+                    "event": "click",
+                    "query": ["role": role ?? "", "title": title ?? "", "text": text ?? "", "identifier": identifier ?? ""],
+                    "matchedElementId": AXHelper.elementId(pid: app.processIdentifier, path: matches.first?.1 ?? [0]),
+                    "result": "success"
+                ])
                 Output.ok(quiet: ctx.options.quiet)
                 return UitoolExit.success.rawValue
             }
@@ -280,39 +381,52 @@ struct Commands {
     }
 
     static func typeText(ctx: CommandContext, args: [String]) -> Int32 {
-        guard let text = args.first else {
+        let interaction = parseInteractionOptions(args)
+        let filteredArgs = removingFlags(args, ["--activate", "--frontmost"])
+        guard let text = positionalArgs(filteredArgs, valueFlags: ["--delay"]).first else {
             Output.error("Usage: type <text>", quiet: ctx.options.quiet)
             return UitoolExit.invalidArguments.rawValue
         }
-        let delay = parseIntFlag(args, "--delay") ?? 0
+        if let code = prepareInteraction(options: ctx.options, interaction: interaction, quiet: ctx.options.quiet) {
+            return code
+        }
+        let delay = parseIntFlag(filteredArgs, "--delay") ?? 0
         EventHelper.type(text: text, delayMs: delay)
+        Trace.log(["event": "type", "textLength": text.count, "delayMs": delay])
         Output.ok(quiet: ctx.options.quiet)
         return UitoolExit.success.rawValue
     }
 
     static func key(ctx: CommandContext, args: [String]) -> Int32 {
-        if args.contains("--list") {
+        let interaction = parseInteractionOptions(args)
+        let filteredArgs = removingFlags(args, ["--activate", "--frontmost"])
+        if filteredArgs.contains("--list") {
             Output.ok(["keys": KeyCodes.supportedKeys()], quiet: ctx.options.quiet)
             return UitoolExit.success.rawValue
         }
-        if let rawIndex = args.firstIndex(of: "--raw") {
-            guard rawIndex + 1 < args.count, let raw = Int(args[rawIndex + 1]) else {
+        if let code = prepareInteraction(options: ctx.options, interaction: interaction, quiet: ctx.options.quiet) {
+            return code
+        }
+        if let rawIndex = filteredArgs.firstIndex(of: "--raw") {
+            guard rawIndex + 1 < filteredArgs.count, let raw = Int(filteredArgs[rawIndex + 1]) else {
                 Output.error("Usage: key --raw <keycode>", quiet: ctx.options.quiet)
                 return UitoolExit.invalidArguments.rawValue
             }
             let shortcut = "raw:\(raw)"
             if EventHelper.keyShortcut(shortcut) {
+                Trace.log(["event": "key", "shortcut": shortcut, "result": "success"])
                 Output.ok(quiet: ctx.options.quiet)
                 return UitoolExit.success.rawValue
             }
             Output.error("Unknown key", quiet: ctx.options.quiet)
             return UitoolExit.invalidArguments.rawValue
         }
-        guard let keyString = args.first else {
+        guard let keyString = positionalArgs(filteredArgs, valueFlags: ["--raw"]).first else {
             Output.error("Usage: key <shortcut>", quiet: ctx.options.quiet)
             return UitoolExit.invalidArguments.rawValue
         }
         if EventHelper.keyShortcut(keyString) {
+            Trace.log(["event": "key", "shortcut": keyString, "result": "success"])
             Output.ok(quiet: ctx.options.quiet)
             return UitoolExit.success.rawValue
         }
@@ -385,39 +499,81 @@ struct Commands {
             return UitoolExit.permissionDenied.rawValue
         }
         let query = parseQueryOptions(args)
+        let elementId = parseStringFlag(args, "--element-id")
+        let targetWindowCount = parseIntFlag(args, "--window-count")
         let gone = args.contains("--gone")
         let timeout = TimeInterval(parseIntFlag(args, "--timeout") ?? Int(ctx.options.timeout))
         guard let app = AXHelper.runningApp(options: ctx.options) else {
             Output.error("App not found", quiet: ctx.options.quiet)
             return UitoolExit.appNotFound.rawValue
         }
+        let hasQuery = query.role != nil || query.title != nil || query.text != nil || query.identifier != nil
+        if !hasQuery, elementId == nil, targetWindowCount == nil {
+            Output.error("Usage: wait --text|--title|--identifier|--role|--element-id|--window-count ...", quiet: ctx.options.quiet)
+            return UitoolExit.invalidArguments.rawValue
+        }
+
+        Trace.log([
+            "event": "wait.start",
+            "target": resolvedTargetData(app),
+            "query": ["role": query.role ?? "", "title": query.title ?? "", "text": query.text ?? "", "identifier": query.identifier ?? "", "window": query.windowTitle ?? ""],
+            "elementId": elementId ?? "",
+            "windowCount": targetWindowCount ?? -1,
+            "gone": gone,
+            "timeoutSec": timeout
+        ])
+
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let matches: [(AXUIElement, [Int])]
+            let queryFound: Bool
             let appElement = AXHelper.appElement(for: app)
-            if let windowTitle = query.windowTitle {
-                if let (root, path) = findWindowRoot(in: appElement, windowTitle: windowTitle) {
-                    matches = AXHelper.findElements(root: root, rootPath: path, role: query.role, title: query.title, identifier: query.identifier, text: query.text)
+            if hasQuery {
+                let matches: [(AXUIElement, [Int])]
+                if let windowTitle = query.windowTitle {
+                    if let (root, path) = findWindowRoot(in: appElement, windowTitle: windowTitle) {
+                        matches = AXHelper.findElements(root: root, rootPath: path, role: query.role, title: query.title, identifier: query.identifier, text: query.text)
+                    } else {
+                        matches = []
+                    }
                 } else {
-                    matches = []
+                    matches = AXHelper.findElements(root: appElement, rootPath: [0], role: query.role, title: query.title, identifier: query.identifier, text: query.text)
                 }
+                queryFound = !matches.isEmpty
             } else {
-                matches = AXHelper.findElements(root: appElement, rootPath: [0], role: query.role, title: query.title, identifier: query.identifier, text: query.text)
+                queryFound = true
             }
-            let found = !matches.isEmpty
+
+            let elementFound: Bool
+            if let elementId {
+                elementFound = AXHelper.elementFromId(elementId) != nil
+            } else {
+                elementFound = true
+            }
+            let windowCountFound: Bool
+            if let targetWindowCount {
+                let windows: [AXUIElement] = AXHelper.attribute(appElement, AXConst.Attr.windows) ?? []
+                windowCountFound = windows.count == targetWindowCount
+            } else {
+                windowCountFound = true
+            }
+
+            let found = queryFound && elementFound && windowCountFound
             if gone {
                 if !found {
+                    Trace.log(["event": "wait.success", "gone": true])
                     Output.ok(quiet: ctx.options.quiet)
                     return UitoolExit.success.rawValue
                 }
             } else {
                 if found {
+                    Trace.log(["event": "wait.success", "gone": false])
                     Output.ok(quiet: ctx.options.quiet)
                     return UitoolExit.success.rawValue
                 }
             }
             Thread.sleep(forTimeInterval: 0.2)
         }
+        Trace.log(["event": "wait.timeout"])
         Output.error("Timeout", quiet: ctx.options.quiet)
         return UitoolExit.timeout.rawValue
     }
@@ -655,6 +811,87 @@ struct Commands {
         return UitoolExit.notFound.rawValue
     }
 
+    static func snapshot(ctx: CommandContext, args: [String]) -> Int32 {
+        guard AXHelper.ensureTrusted() else {
+            Output.error("Accessibility permission denied", quiet: ctx.options.quiet)
+            return UitoolExit.permissionDenied.rawValue
+        }
+        let options = optionsWithPositionalTarget(ctx.options, args: args)
+        guard let app = AXHelper.runningApp(options: options) else {
+            Output.error("App not found", quiet: ctx.options.quiet)
+            return UitoolExit.appNotFound.rawValue
+        }
+        let appElement = AXHelper.appElement(for: app)
+        let depth = parseIntFlag(args, "--depth") ?? 5
+        let outputPath = parseStringFlag(args, "--output") ?? parseStringFlag(args, "-o")
+        let windows: [AXUIElement] = AXHelper.attribute(appElement, AXConst.Attr.windows) ?? []
+        let target = resolvedTargetData(app)
+        let data: [String: Any] = [
+            "capturedAt": ISO8601DateFormatter().string(from: Date()),
+            "target": target,
+            "windowCount": windows.count,
+            "tree": AXHelper.elementInfo(element: appElement, pid: app.processIdentifier, path: [0], depth: depth)
+        ]
+        Trace.log(["event": "snapshot", "target": target, "depth": depth, "output": outputPath ?? "stdout"])
+        if let outputPath {
+            guard writeJSONObject(data, to: outputPath) else {
+                Output.error("Failed to write file", quiet: ctx.options.quiet)
+                return UitoolExit.notFound.rawValue
+            }
+            Output.ok(["path": outputPath], quiet: ctx.options.quiet)
+            return UitoolExit.success.rawValue
+        }
+        Output.ok(data, quiet: ctx.options.quiet)
+        return UitoolExit.success.rawValue
+    }
+
+    static func diff(ctx: CommandContext, args: [String]) -> Int32 {
+        guard args.count >= 2 else {
+            Output.error("Usage: diff <before.json> <after.json>", quiet: ctx.options.quiet)
+            return UitoolExit.invalidArguments.rawValue
+        }
+        let beforePath = args[0]
+        let afterPath = args[1]
+        guard let before = readJSONObject(at: beforePath), let after = readJSONObject(at: afterPath) else {
+            Output.error("Failed to read snapshot file", quiet: ctx.options.quiet)
+            return UitoolExit.notFound.rawValue
+        }
+        guard let beforeSnapshot = extractSnapshotPayload(before), let afterSnapshot = extractSnapshotPayload(after) else {
+            Output.error("Invalid snapshot file", quiet: ctx.options.quiet)
+            return UitoolExit.invalidArguments.rawValue
+        }
+        let beforeMap = flattenSnapshot(snapshot: beforeSnapshot)
+        let afterMap = flattenSnapshot(snapshot: afterSnapshot)
+
+        let beforeIds = Set(beforeMap.keys)
+        let afterIds = Set(afterMap.keys)
+        let addedIds = afterIds.subtracting(beforeIds).sorted()
+        let removedIds = beforeIds.subtracting(afterIds).sorted()
+
+        let shared = beforeIds.intersection(afterIds).sorted()
+        let changed = shared.compactMap { id -> [String: Any]? in
+            guard let left = beforeMap[id], let right = afterMap[id] else { return nil }
+            let leftComparable = comparableSnapshotNode(left)
+            let rightComparable = comparableSnapshotNode(right)
+            guard !NSDictionary(dictionary: leftComparable).isEqual(to: rightComparable) else { return nil }
+            return ["id": id, "before": leftComparable, "after": rightComparable]
+        }
+
+        let data: [String: Any] = [
+            "added": addedIds,
+            "removed": removedIds,
+            "changed": changed,
+            "summary": [
+                "added": addedIds.count,
+                "removed": removedIds.count,
+                "changed": changed.count
+            ]
+        ]
+        Trace.log(["event": "snapshot.diff", "before": beforePath, "after": afterPath, "summary": data["summary"] ?? [:]])
+        Output.ok(data, quiet: ctx.options.quiet)
+        return UitoolExit.success.rawValue
+    }
+
     static func screenshot(ctx: CommandContext, args: [String]) -> Int32 {
         guard AXHelper.ensureTrusted() else {
             Output.error("Accessibility permission denied", quiet: ctx.options.quiet)
@@ -857,6 +1094,9 @@ func parseFindOptions(_ args: [String]) -> FindOptions {
         case "--text":
             if i + 1 < args.count { options.text = args[i + 1] }
             i += 2
+        case "--query":
+            if i + 1 < args.count { options.text = args[i + 1] }
+            i += 2
         case "--identifier":
             if i + 1 < args.count { options.identifier = args[i + 1] }
             i += 2
@@ -875,7 +1115,7 @@ func parseFindOptions(_ args: [String]) -> FindOptions {
         default:
             if !arg.hasPrefix("-"),
                options.role == nil, options.title == nil, options.identifier == nil, options.text == nil {
-                options.role = arg
+                options.text = arg
             }
             i += 1
         }
@@ -951,8 +1191,16 @@ func firstPositionalArg(_ args: [String]) -> String? {
     args.first { !$0.hasPrefix("-") }
 }
 
+func optionsWithPositionalTarget(_ options: GlobalOptions, args: [String]) -> GlobalOptions {
+    var resolved = options
+    if !hasTarget(resolved), let name = firstPositionalArg(args) {
+        resolved.appName = name
+    }
+    return resolved
+}
+
 func hasTarget(_ options: GlobalOptions) -> Bool {
-    options.appName != nil || options.bundleId != nil || options.pid != nil
+    options.appName != nil || options.bundleId != nil || options.pid != nil || options.appPath != nil || options.executablePath != nil
 }
 
 func focusedWindow(for app: NSRunningApplication) -> AXUIElement? {
@@ -1005,6 +1253,7 @@ func withResolvedRoot(options: GlobalOptions, windowTitle: String?, quiet: Bool,
         Output.error("Window not found", quiet: quiet)
         return UitoolExit.notFound.rawValue
     case .ok(let app, let root, let path):
+        Trace.log(["event": "target.resolved", "target": resolvedTargetData(app), "window": windowTitle ?? ""])
         return body(app, root, path)
     }
 }
@@ -1173,4 +1422,141 @@ func writeCGImage(_ image: CGImage, output: String?, quiet: Bool) -> Int32 {
     }
     FileHandle.standardOutput.write(data)
     return UitoolExit.success.rawValue
+}
+
+struct InteractionOptions {
+    var activate = false
+    var frontmost = false
+}
+
+func parseInteractionOptions(_ args: [String]) -> InteractionOptions {
+    InteractionOptions(activate: args.contains("--activate"), frontmost: args.contains("--frontmost"))
+}
+
+func removingFlags(_ args: [String], _ flags: [String]) -> [String] {
+    let flagSet = Set(flags)
+    return args.filter { !flagSet.contains($0) }
+}
+
+func positionalArgs(_ args: [String], valueFlags: [String] = []) -> [String] {
+    let valueFlagSet = Set(valueFlags)
+    var result: [String] = []
+    var i = 0
+    while i < args.count {
+        let arg = args[i]
+        if valueFlagSet.contains(arg) {
+            i += 2
+            continue
+        }
+        if !arg.hasPrefix("-") {
+            result.append(arg)
+        }
+        i += 1
+    }
+    return result
+}
+
+func prepareInteraction(options: GlobalOptions, interaction: InteractionOptions, quiet: Bool, elementId: String? = nil) -> Int32? {
+    guard interaction.activate || interaction.frontmost else { return nil }
+    var targetOptions = options
+    if !hasTarget(targetOptions), let elementId, let parsed = AXHelper.parseElementId(elementId) {
+        targetOptions.pid = parsed.pid
+    }
+    guard let app = (hasTarget(targetOptions) ? AXHelper.runningApp(options: targetOptions) : AXHelper.frontmostApp()) else {
+        Output.error("App not found", quiet: quiet)
+        return UitoolExit.appNotFound.rawValue
+    }
+    if interaction.activate {
+        guard app.activate(options: [.activateIgnoringOtherApps]) else {
+            Output.error("Failed to focus app", quiet: quiet)
+            return UitoolExit.appNotFound.rawValue
+        }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    if interaction.frontmost, AXHelper.frontmostApp()?.processIdentifier != app.processIdentifier {
+        Output.error("Target app is not frontmost", quiet: quiet)
+        return UitoolExit.appNotFound.rawValue
+    }
+    Trace.log(["event": "interaction.prepare", "target": resolvedTargetData(app), "activate": interaction.activate, "frontmost": interaction.frontmost])
+    return nil
+}
+
+func resolvedTargetData(_ app: NSRunningApplication) -> [String: Any] {
+    let appElement = AXHelper.appElement(for: app)
+    let windows: [AXUIElement] = AXHelper.attribute(appElement, AXConst.Attr.windows) ?? []
+    return [
+        "name": app.localizedName ?? "",
+        "pid": Int(app.processIdentifier),
+        "bundleId": app.bundleIdentifier ?? "",
+        "appPath": AXHelper.resolvedPath(app.bundleURL?.path) ?? "",
+        "executablePath": AXHelper.resolvedPath(app.executableURL?.path) ?? "",
+        "windowCount": windows.count,
+        "frontmost": app.processIdentifier == AXHelper.frontmostApp()?.processIdentifier,
+        "target": "app://\(app.processIdentifier)"
+    ]
+}
+
+func elementSummary(_ element: AXUIElement, pid: pid_t, appElement: AXUIElement) -> [String: Any] {
+    if let path = AXHelper.findPath(to: element, in: appElement) {
+        return AXHelper.elementInfo(element: element, pid: pid, path: path, depth: 0)
+    }
+    var info = AXHelper.elementInfo(element: element, pid: pid, path: [0], depth: 0)
+    info.removeValue(forKey: "id")
+    return info
+}
+
+func writeJSONObject(_ object: [String: Any], to path: String) -> Bool {
+    guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]) else { return false }
+    do {
+        try data.write(to: URL(fileURLWithPath: path))
+        return true
+    } catch {
+        return false
+    }
+}
+
+func readJSONObject(at path: String) -> [String: Any]? {
+    guard let data = FileManager.default.contents(atPath: path) else { return nil }
+    guard let object = try? JSONSerialization.jsonObject(with: data) else { return nil }
+    return object as? [String: Any]
+}
+
+func extractSnapshotPayload(_ object: [String: Any]) -> [String: Any]? {
+    if let ok = object["ok"] as? Bool, ok, let data = object["data"] as? [String: Any] {
+        return data
+    }
+    if object["tree"] != nil {
+        return object
+    }
+    return nil
+}
+
+func flattenSnapshot(snapshot: [String: Any]) -> [String: [String: Any]] {
+    guard let tree = snapshot["tree"] as? [String: Any] else { return [:] }
+    var map: [String: [String: Any]] = [:]
+    collectSnapshotNodes(tree, into: &map)
+    return map
+}
+
+func collectSnapshotNodes(_ node: [String: Any], into map: inout [String: [String: Any]]) {
+    if let id = node["id"] as? String {
+        map[id] = node
+    }
+    guard let children = node["children"] as? [Any] else { return }
+    for child in children {
+        if let childNode = child as? [String: Any] {
+            collectSnapshotNodes(childNode, into: &map)
+        }
+    }
+}
+
+func comparableSnapshotNode(_ node: [String: Any]) -> [String: Any] {
+    var result: [String: Any] = [:]
+    let keys = ["role", "title", "value", "description", "identifier", "enabled", "focused", "frame"]
+    for key in keys {
+        if let value = node[key] {
+            result[key] = value
+        }
+    }
+    return result
 }

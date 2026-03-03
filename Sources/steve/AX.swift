@@ -17,6 +17,8 @@ enum AXConst {
         static let value: CFString = "AXValue" as CFString
         static let selected: CFString = "AXSelected" as CFString
         static let selectedRows: CFString = "AXSelectedRows" as CFString
+        static let selectedChildren: CFString = "AXSelectedChildren" as CFString
+        static let selectedText: CFString = "AXSelectedText" as CFString
         static let main: CFString = "AXMain" as CFString
         static let minimized: CFString = "AXMinimized" as CFString
         static let fullScreen: CFString = "AXFullScreen" as CFString
@@ -25,6 +27,7 @@ enum AXConst {
         static let menuBar: CFString = "AXMenuBar" as CFString
         static let menu: CFString = "AXMenu" as CFString
         static let windowNumber: CFString = "AXWindowNumber" as CFString
+        static let focusedUIElement: CFString = "AXFocusedUIElement" as CFString
     }
 
     enum Action {
@@ -38,13 +41,26 @@ struct GlobalOptions {
     var appName: String?
     var pid: pid_t?
     var bundleId: String?
+    var appPath: String?
+    var executablePath: String?
     var timeout: TimeInterval = 5
     var verbose = false
     var quiet = false
     var format: OutputFormat = .text
+    var traceJSONL = false
+    var tracePath: String?
 }
 
 struct AXHelper {
+    static func canonicalPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    static func resolvedPath(_ path: String?) -> String? {
+        guard let path, !path.isEmpty else { return nil }
+        return canonicalPath(path)
+    }
+
     static func ensureTrusted() -> Bool {
         if AXIsProcessTrusted() { return true }
         let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString: true]
@@ -59,6 +75,20 @@ struct AXHelper {
     static func runningApp(options: GlobalOptions) -> NSRunningApplication? {
         if let pid = options.pid {
             return NSRunningApplication(processIdentifier: pid)
+        }
+        if let appPath = options.appPath {
+            let target = canonicalPath(appPath)
+            return NSWorkspace.shared.runningApplications.first(where: { app in
+                let bundlePath = resolvedPath(app.bundleURL?.path)
+                let execPath = resolvedPath(app.executableURL?.path)
+                return bundlePath == target || execPath == target
+            })
+        }
+        if let executablePath = options.executablePath {
+            let target = canonicalPath(executablePath)
+            return NSWorkspace.shared.runningApplications.first(where: { app in
+                resolvedPath(app.executableURL?.path) == target
+            })
         }
         if let bundle = options.bundleId {
             return NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first
@@ -130,14 +160,12 @@ struct AXHelper {
         return nil
     }
 
-    static func textCandidates(for element: AXUIElement, role: String) -> [String] {
+    static func textCandidates(for element: AXUIElement, role _: String) -> [String] {
         var candidates: [String] = []
+        if let title = stringAttribute(element, AXConst.Attr.title) { candidates.append(title) }
         if let value = stringAttribute(element, AXConst.Attr.value) { candidates.append(value) }
         if let desc = stringAttribute(element, AXConst.Attr.description) { candidates.append(desc) }
-        if role == "AXStaticText" || role == "AXHeading",
-           let title = stringAttribute(element, AXConst.Attr.title) {
-            candidates.append(title)
-        }
+        if let identifier = stringAttribute(element, AXConst.Attr.identifier) { candidates.append(identifier) }
         return candidates
     }
 
@@ -186,6 +214,8 @@ struct AXHelper {
         dict["id"] = elementId(pid: pid, path: path)
         if let role = role(of: element) { dict["role"] = role }
         if let title = title(of: element) { dict["title"] = title }
+        if let value = stringAttribute(element, AXConst.Attr.value) { dict["value"] = value }
+        if let description = stringAttribute(element, AXConst.Attr.description) { dict["description"] = description }
         if let identifier = identifier(of: element) { dict["identifier"] = identifier }
         if let enabled = boolAttribute(element, AXConst.Attr.enabled) { dict["enabled"] = enabled }
         if let focused = boolAttribute(element, AXConst.Attr.focused) { dict["focused"] = focused }

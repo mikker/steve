@@ -47,6 +47,9 @@ JSON:
 
 ```
 steve apps
+steve resolve --app "Safari"
+steve resolve --app-path "/Applications/Safari.app"
+steve attach --pid 1234
 steve focus "AppName"
 steve focus --pid 1234
 steve focus --bundle "com.example.app"
@@ -60,7 +63,7 @@ steve quit "AppName" --force
 steve elements
 steve elements --depth 5
 steve elements --window "Settings"
-steve find "Button"
+steve find "Dictation Mode"
 steve find --title "Submit"
 steve find --text "Dictation Mode"
 steve find --text "Dictation Mode" --window "Settings" --ancestor-role AXRow --click
@@ -73,12 +76,13 @@ steve element-at 100 200
 
 ```
 steve click "ax://1234/0.2.5"
+steve click --activate --frontmost "ax://1234/0.2.5"
 steve click --title "Submit"
 steve click --text "Dictation Mode"
 steve click --window "Settings" --text "Dictation Mode"
 steve click-at 100 200 --double
-steve type "hello world" --delay 50
-steve key cmd+shift+p
+steve type --activate "hello world" --delay 50
+steve key --activate cmd+shift+p
 steve key f12
 steve key fn+f12
 steve key --raw 122
@@ -90,9 +94,10 @@ steve scroll --element "ax://1234/0.4" up
 
 ### Reliability Helpers
 
-- `--text` matches visible text via `AXValue`, `AXDescription`, and `AXStaticText` title (case-insensitive substring).
+- `find --text` (and positional `find "query"`) matches across `AXTitle`, `AXValue`, `AXDescription`, and `AXIdentifier` (case-insensitive substring).
 - `--window "Title"` scopes `find`, `elements`, and `click` to a specific window title.
 - `--ancestor-role AXRow|AXCell|AXButton --click` clicks the nearest ancestor role after a text match.
+- `--activate` and `--frontmost` can be used with `key`, `type`, and `click`.
 
 ### Assertions
 
@@ -102,9 +107,19 @@ steve exists --text "Ready" --window "Settings"
 steve wait --title "Results" --timeout 5
 steve wait --title "Loading..." --gone --timeout 10
 steve wait --text "Loading..." --window "Settings" --timeout 10
+steve wait-for --window-count 2 --timeout 10
+steve wait-for --element-id "ax://1234/0.4" --timeout 10
 steve assert --title "Submit" --enabled
 steve assert --title "Checkbox" --checked
 steve assert --title "Input" --value "expected text"
+```
+
+### Focus And Selection
+
+```
+steve focused
+steve selection
+steve selection --app "Finder"
 ```
 
 ### Windows
@@ -136,17 +151,30 @@ steve screenshot --app "AppName" -o screenshot.png
 steve screenshot --element "ax://1234/0.2" -o element.png
 ```
 
+### Snapshots And Diff
+
+```
+steve snapshot --output before.json
+steve snapshot --output after.json
+steve diff before.json after.json
+```
+
 ## Global Options
 
 ```
 --app "Name"
 --pid 1234
 --bundle "id"
+--app-path "/Applications/Safari.app"
+--exec-path "/Applications/Safari.app/Contents/MacOS/Safari"
+--target app://1234
 --timeout 5
 --verbose
 --quiet
 --format text|json
 -j
+--jsonl-trace
+--jsonl-trace /tmp/steve-trace.jsonl
 ```
 
 ## Exit Codes
