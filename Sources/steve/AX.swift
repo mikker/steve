@@ -6,6 +6,8 @@ enum AXConst {
     enum Attr {
         static let frame: CFString = "AXFrame" as CFString
         static let children: CFString = "AXChildren" as CFString
+        static let visibleChildren: CFString = "AXVisibleChildren" as CFString
+        static let childrenInNavigationOrder: CFString = "AXChildrenInNavigationOrder" as CFString
         static let role: CFString = "AXRole" as CFString
         static let title: CFString = "AXTitle" as CFString
         static let description: CFString = "AXDescription" as CFString
@@ -16,6 +18,10 @@ enum AXConst {
         static let focusedWindow: CFString = "AXFocusedWindow" as CFString
         static let value: CFString = "AXValue" as CFString
         static let selected: CFString = "AXSelected" as CFString
+        static let rows: CFString = "AXRows" as CFString
+        static let visibleRows: CFString = "AXVisibleRows" as CFString
+        static let columns: CFString = "AXColumns" as CFString
+        static let visibleColumns: CFString = "AXVisibleColumns" as CFString
         static let selectedRows: CFString = "AXSelectedRows" as CFString
         static let selectedChildren: CFString = "AXSelectedChildren" as CFString
         static let selectedText: CFString = "AXSelectedText" as CFString
@@ -52,6 +58,18 @@ struct GlobalOptions {
 }
 
 struct AXHelper {
+    static let childAttributeTraversalOrder: [CFString] = [
+        AXConst.Attr.children,
+        AXConst.Attr.visibleChildren,
+        AXConst.Attr.childrenInNavigationOrder,
+        AXConst.Attr.rows,
+        AXConst.Attr.visibleRows,
+        AXConst.Attr.columns,
+        AXConst.Attr.visibleColumns,
+        AXConst.Attr.selectedChildren,
+        AXConst.Attr.selectedRows
+    ]
+
     static func canonicalPath(_ path: String) -> String {
         URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
     }
@@ -133,10 +151,16 @@ struct AXHelper {
     }
 
     static func children(of element: AXUIElement) -> [AXUIElement] {
-        if let children: [AXUIElement] = attribute(element, AXConst.Attr.children) {
-            return children
+        var merged: [AXUIElement] = []
+
+        for attr in childAttributeTraversalOrder {
+            guard let candidates: [AXUIElement] = attribute(element, attr) else { continue }
+            for candidate in candidates where !merged.contains(where: { CFEqual($0, candidate) }) {
+                merged.append(candidate)
+            }
         }
-        return []
+
+        return merged
     }
 
     static func role(of element: AXUIElement) -> String? {

@@ -13,4 +13,12 @@ final class AXHelperTests: XCTestCase {
         XCTAssertEqual(AXHelper.normalizeRole("Button"), "AXButton")
         XCTAssertEqual(AXHelper.normalizeRole("AXButton"), "AXButton")
     }
+
+    func testChildTraversalOrderIncludesSwiftUIRelevantCollections() {
+        XCTAssertEqual(AXHelper.childAttributeTraversalOrder.first, AXConst.Attr.children)
+        XCTAssertTrue(AXHelper.childAttributeTraversalOrder.contains(AXConst.Attr.visibleChildren))
+        XCTAssertTrue(AXHelper.childAttributeTraversalOrder.contains(AXConst.Attr.childrenInNavigationOrder))
+        XCTAssertTrue(AXHelper.childAttributeTraversalOrder.contains(AXConst.Attr.rows))
+        XCTAssertTrue(AXHelper.childAttributeTraversalOrder.contains(AXConst.Attr.visibleRows))
+    }
 }
