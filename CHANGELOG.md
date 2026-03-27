@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-03-27
+
+### Added
+- Command-specific help for every shipped CLI command, including aliases.
+- `steve help <command>` as an explicit alternative to `steve <command> --help`.
+
+### Changed
+- Top-level help is now generated from the same command registry as per-command help so command discovery stays consistent.
+
+### Fixed
+- Literal `help` arguments are no longer mistaken for help flags in command parsing.
+- CLI tests now verify that every dispatched command is documented and exposes help.
+
 ## [0.5.0] - 2026-03-04
 
 ### Added
