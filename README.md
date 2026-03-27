@@ -23,6 +23,8 @@ All commands output structured text to stdout by default, except `screenshot` wh
 
 Use `--format json` (or `-j`) for compact JSON output. Errors go to stderr and return a non-zero exit code.
 
+Use `steve --help` for the top-level command list, `steve <command> --help` for command-specific usage, and `steve help <command>` as an equivalent form.
+
 Text:
 
 ```
