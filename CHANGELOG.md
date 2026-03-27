@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Updated the release workflow to Node 24-compatible GitHub Action majors (`actions/checkout@v6`, `actions/upload-artifact@v6`, `actions/download-artifact@v8`).
+
 ## [0.5.1] - 2026-03-27
 
 ### Added
