@@ -917,8 +917,15 @@ struct Commands {
             Output.error("App not found", quiet: ctx.options.quiet)
             return UitoolExit.appNotFound.rawValue
         }
+        // Try AXWindowNumber first
         if let window = focusedWindow(for: app), let number: NSNumber = AXHelper.attribute(window, AXConst.Attr.windowNumber) {
             if let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(number.uint32Value), [.boundsIgnoreFraming]) {
+                return writeCGImage(image, output: output, quiet: ctx.options.quiet)
+            }
+        }
+        // Fallback: find window via CGWindowList by PID
+        if let windowID = windowIDFromCGWindowList(pid: app.processIdentifier) {
+            if let image = CGWindowListCreateImage(.null, .optionIncludingWindow, windowID, [.boundsIgnoreFraming]) {
                 return writeCGImage(image, output: output, quiet: ctx.options.quiet)
             }
         }
@@ -1389,6 +1396,16 @@ func findMenuContainer(menuBar: AXUIElement, path: [String], match: MenuMatchOpt
 
 func capture(rect: CGRect) -> CGImage? {
     CGWindowListCreateImage(rect, .optionOnScreenOnly, kCGNullWindowID, [.boundsIgnoreFraming])
+}
+
+func windowIDFromCGWindowList(pid: pid_t) -> CGWindowID? {
+    guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+    let appWindows = list.filter {
+        ($0[kCGWindowOwnerPID as String] as? pid_t) == pid
+            && ($0[kCGWindowLayer as String] as? Int) == 0
+    }
+    guard let first = appWindows.first, let id = first[kCGWindowNumber as String] as? CGWindowID else { return nil }
+    return id
 }
 
 func writeImage(_ image: CGImage, output: String?, quiet: Bool) -> Int32 {
