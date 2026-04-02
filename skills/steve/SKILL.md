@@ -53,6 +53,26 @@ steve key cmd+shift+p
 steve menu "File" "New"
 ```
 
+## Multi-Step Workflow
+
+Chain commands to automate a full UI interaction with validation:
+
+```bash
+# 1. Find the target element
+steve find --text "Dictation Mode" --window "Settings"
+
+# 2. Wait for UI to be ready
+steve wait --text "Dictation Mode" --window "Settings" --timeout 5
+
+# 3. Click the containing row
+steve find --text "Dictation Mode" --window "Settings" --ancestor-role AXRow --click
+
+# 4. Verify the result — confirm a new element appeared
+steve wait --title "Dictation Mode Options" --timeout 5
+```
+
+If `steve find` returns no results, verify the window title with `steve windows --app "System Settings"` and retry with broader text. If it returns multiple matches, narrow with `--window` or `--ancestor-role` to isolate the target.
+
 ## Reliability Tips
 
 - Prefer `--window` and `--text` over raw coordinates.
@@ -60,4 +80,9 @@ steve menu "File" "New"
 
 ```bash
 steve wait --title "Results" --timeout 5
+```
+- If an element is not found, list available elements to debug:
+
+```bash
+steve elements --app "System Settings" --window "Settings"
 ```
